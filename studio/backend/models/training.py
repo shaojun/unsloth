@@ -151,6 +151,13 @@ class TrainingStartRequest(BaseModel):
         None,
         description = "Server-verified model snapshot directory pinned for this run",
     )
+    confirm_playground_instances: bool = Field(
+        False,
+        description = (
+            "User acknowledged that playground-hosted models are running and "
+            "chose to train anyway (GPU contention warning)"
+        ),
+    )
 
     hf_dataset: Optional[str] = Field(None, description = "HuggingFace dataset identifier")
     dataset_known_cached: bool = Field(

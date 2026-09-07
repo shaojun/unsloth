@@ -93,6 +93,7 @@ import {
   FolderOpenIcon,
   Folder01Icon,
   FlimSlateIcon,
+  GamepadDirectionalIcon,
   Globe02Icon,
   HelpCircleIcon,
   Image03Icon,
@@ -2131,6 +2132,18 @@ export function AppSidebar() {
       },
     },
     // The monitor page, not the API keys dialog the profile menu opens.
+    playground: {
+      icon: GamepadDirectionalIcon,
+      label: t("shell.navigation.playground"),
+      active: pathname === "/playground" || pathname.startsWith("/playground/"),
+      onClick: () => {
+        navigate({ to: "/playground" });
+        closeMobileIfOpen();
+      },
+      onIntent: () => {
+        preloadSilently(router.preloadRoute({ to: "/playground" }));
+      },
+    },
     api: {
       icon: Globe02Icon,
       label: t("shell.navigation.api"),

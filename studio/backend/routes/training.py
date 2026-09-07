@@ -1151,6 +1151,19 @@ def _background_video_generation_active() -> bool:
         return False
 
 
+def _playground_running_instances() -> list[dict]:
+    """Playground-hosted vLLM instances currently holding GPU memory.
+
+    Best-effort: a playground storage failure must never block training."""
+    try:
+        from storage import playground_db
+
+        return playground_db.list_running_instances()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Could not check playground instances for training guard: %s", e)
+        return []
+
+
 @router.post("/start", responses = _TRAINING_START_ERROR_RESPONSES)
 async def start_training(
     request: TrainingStartRequest,
@@ -1260,6 +1273,39 @@ async def start_training(
                 message = message,
                 error = "Diffusion training already active",
             )
+
+        # Playground warning gate: hosted vLLM instances compete with training
+        # for GPU memory. Never silently kill them -- surface a 409 the UI (and
+        # CLI) turns into an explicit "stop them / keep them / cancel" choice,
+        # only overridden by confirm_playground_instances on the retry.
+        if not request.confirm_playground_instances:
+            running_instances = await asyncio.to_thread(_playground_running_instances)
+            if running_instances:
+                names = ", ".join(
+                    instance.get("name") or instance["id"] for instance in running_instances
+                )
+                raise HTTPException(
+                    status_code = 409,
+                    detail = {
+                        "message": (
+                            f"{len(running_instances)} playground model(s) are hosting in the "
+                            "background and can severely degrade training performance. Stop "
+                            "them before training, or confirm to train anyway."
+                        ),
+                        "instances": [
+                            {
+                                "id": instance["id"],
+                                "name": instance.get("name"),
+                                "gpu_memory_utilization": instance.get(
+                                    "gpu_memory_utilization"
+                                ),
+                            }
+                            for instance in running_instances
+                        ],
+                        "conflict_kind": "playground_instances_running",
+                    },
+                    headers = {"X-Unsloth-Conflict-Kind": "playground_instances_running"},
+                )
 
         resume_output_dir: Optional[str] = None
         resume_run: Optional[dict] = None

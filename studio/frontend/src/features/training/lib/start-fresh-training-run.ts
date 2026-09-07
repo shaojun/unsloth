@@ -4,6 +4,10 @@
 import { usePlatformStore } from "@/config/env";
 import { prepareHfTokenForUse } from "@/features/hf-auth";
 import { getHfToken, useHfTokenStore } from "@/features/hub";
+import {
+  showPlaygroundTrainingConflict,
+  playgroundApi,
+} from "@/features/playground";
 import { confirmRemoteCodeIfNeeded } from "@/features/security";
 import { translate } from "@/i18n";
 import { primeNativeNotificationPermission } from "@/lib/native-notifications";
@@ -519,6 +523,7 @@ async function confirmSelectedModelRemoteCode(
 async function submitFreshTrainingRun(
   attempt: FreshTrainingStartAttempt,
   hfToken: string | null,
+  confirmPlaygroundInstances?: boolean,
 ): Promise<boolean> {
   const validation = validateTrainingConfig(
     attempt.config,
@@ -529,6 +534,9 @@ async function submitFreshTrainingRun(
   }
 
   const payload = buildTrainingStartPayload(attempt.config, hfToken);
+  if (confirmPlaygroundInstances) {
+    payload.confirm_playground_instances = true;
+  }
   if (!attempt.enterTransport()) {
     return false;
   }
@@ -542,7 +550,37 @@ async function submitFreshTrainingRun(
       payload.project_name ?? "",
       payload.hf_token,
     );
-  const response = await startTraining(payload, attempt.startRequestId);
+  let response: Awaited<ReturnType<typeof startTraining>>;
+  try {
+    response = await startTraining(payload, attempt.startRequestId);
+  } catch (error) {
+    // GPU-contention gate: playground-hosted vLLM instances are running and
+    // the user hasn't confirmed. Turn the refusal into an explicit choice.
+    if (
+      error instanceof TrainingStartError &&
+      error.playgroundConflict !== null
+    ) {
+      const choice = await showPlaygroundTrainingConflict(
+        error.playgroundConflict.instanceNames,
+      );
+      if (choice === "cancel") {
+        return attempt.cancel(error.message);
+      }
+      if (choice === "stop_all") {
+        try {
+          await playgroundApi.stopAllInstances();
+        } catch {
+          /* best-effort; the retry will re-refuse if instances survive */
+        }
+      }
+      return await submitFreshTrainingRun(
+        attempt,
+        hfToken,
+        choice === "keep_running" ? true : undefined,
+      );
+    }
+    throw error;
+  }
   if (response.status === "error") {
     throw new TrainingStartError(
       response.error || response.message,

@@ -229,6 +229,10 @@ const CHAT_ONLY_ALLOWED = new Set([
   // Chat-only hosts serve the API like any other, so the monitor must be reachable there
   // or the overlay's "Expand" and the Settings API card redirect to /chat.
   "/api-monitor",
+  // Playground works chat-only too: external OpenAI-compatible sources, the
+  // judge, blind tests and reports never touch the local GPU (hosting a local
+  // model simply reports "vLLM not installed" on such a host).
+  "/playground",
 ]);
 
 // Paths that render their own "still checking" state and self-gate once the verdict lands.

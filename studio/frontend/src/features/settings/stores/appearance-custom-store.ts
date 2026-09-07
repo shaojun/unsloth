@@ -98,6 +98,7 @@ export const SIDEBAR_NAV_ITEM_IDS = [
   "train",
   "recipes",
   "export",
+  "playground",
   "api",
 ] as const;
 
@@ -120,13 +121,14 @@ export const SIDEBAR_NAV_DEFAULT_PINNED: Record<SidebarNavItemId, boolean> = {
   train: true,
   recipes: false,
   export: false,
+  playground: true,
   api: false,
 };
 
 /** Every previously shipped layout, so a migration can tell an untouched install from one the
  *  user arranged themselves. v3 pinned Video under Images; v4 moved Model hub above Projects;
  *  v5 put Video back under "More" and later added API before Audio shipped; v6 added Audio;
- *  v7 pins Video under Images again. */
+ *  v7 pins Video under Images again; v8 adds the Playground row above API. */
 const SHIPPED_SIDEBAR_NAV_DEFAULTS: SidebarNavItemPref[][] = [
   [
     { id: "projects", pinned: true },
@@ -174,6 +176,18 @@ const SHIPPED_SIDEBAR_NAV_DEFAULTS: SidebarNavItemPref[][] = [
     { id: "train", pinned: true },
     { id: "recipes", pinned: false },
     { id: "export", pinned: false },
+    { id: "api", pinned: false },
+  ],
+  [
+    { id: "hub", pinned: true },
+    { id: "projects", pinned: true },
+    { id: "images", pinned: true },
+    { id: "video", pinned: false },
+    { id: "audio", pinned: false },
+    { id: "train", pinned: true },
+    { id: "recipes", pinned: false },
+    { id: "export", pinned: false },
+    { id: "playground", pinned: true },
     { id: "api", pinned: false },
   ],
 ];

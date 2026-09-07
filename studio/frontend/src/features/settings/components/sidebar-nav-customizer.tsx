@@ -9,6 +9,7 @@ import {
   DragDropVerticalIcon,
   FlimSlateIcon,
   Folder01Icon,
+  GamepadDirectionalIcon,
   Globe02Icon,
   Image03Icon,
   MoreHorizontalIcon,
@@ -36,6 +37,7 @@ const ITEM_META: Record<
   audio: { icon: AudioWave01Icon, labelKey: "shell.navigation.audio" },
   recipes: { icon: ChefHatIcon, labelKey: "shell.navigation.recipes" },
   export: { icon: DownloadSquare01Icon, labelKey: "shell.navigation.export" },
+  playground: { icon: GamepadDirectionalIcon, labelKey: "shell.navigation.playground" },
   api: { icon: Globe02Icon, labelKey: "shell.navigation.api" },
 };
 

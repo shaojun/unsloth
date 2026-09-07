@@ -38,6 +38,7 @@ import { useTrainingCacheReconciliation } from "./hooks/use-training-cache-recon
 import { LiveTrainingView } from "./live-training-view";
 import { DatasetPreviewDialog } from "./sections/dataset-preview-dialog";
 import { TrainSubNav } from "./studio-navigation";
+import { PlaygroundTrainingConflictDialog } from "@/features/playground";
 import { studioTourSteps, studioTrainingTourSteps } from "./tour";
 import {
   type TrainSubTab,
@@ -306,6 +307,8 @@ export function StudioPage(): ReactElement {
             initialData={dialogInitial}
             isVlm={config.isVisionModel && config.isDatasetImage === true}
           />
+
+          <PlaygroundTrainingConflictDialog />
         </div>
       </Tabs>
     </div>
