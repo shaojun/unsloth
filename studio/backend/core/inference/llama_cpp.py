@@ -12602,6 +12602,70 @@ class LlamaCppBackend:
             return total if total > 0 else None
         return draft_kv + weights + target_ctx_copy + target_recurrent_copies
 
+    def _mtp_reserve_note(
+        self,
+        reserve_bytes: int,
+        *,
+        n_ctx: int,
+        n_parallel: int,
+        n_ubatch: Optional[int],
+        n_max: Optional[int],
+        target_rollback: bool,
+        flat_fallback: bool,
+        reprice: Optional[Callable[[int, int], int]] = None,
+    ) -> str:
+        """The MTP reserve line, naming only the dimensions that move the number.
+
+        Which ones bite is per-model, so ``reprice`` (the estimator the reserve came
+        from) is asked rather than re-deriving its branches; without it every
+        dimension is named, as before. n_max is not one of its arguments, so that one
+        stays structural. A None micro-batch is rendered as llama.cpp's default, since
+        "ubatch None" names no parameter.
+        """
+        ubatch = self._DEFAULT_N_UBATCH if n_ubatch is None else n_ubatch
+
+        def _moves(*candidates: tuple[int, int]) -> bool:
+            if reprice is None:
+                return True
+            try:
+                # The estimator's own value, not the total: a flat fallback reports 0.
+                base = reprice(n_parallel, ubatch)
+                for slots, ub in candidates:
+                    if reprice(slots, ub) != base:
+                        return True
+            except Exception:
+                # Cannot answer says nothing about the dependency: keep the name.
+                return True
+            return False
+
+        # Every slot count DIVIDING the padded total reproduces it: at 12288 cells 2, 3
+        # and 4 price the same, only 5 moves. The last candidate exceeds it, so cannot.
+        _cells = _pad_kv_cells(max(1, n_ctx)) // 256
+        slots_named = _moves(
+            (n_parallel + 1, ubatch),
+            (n_parallel + 2, ubatch),
+            (max(n_parallel + 3, n_parallel * 2), ubatch),
+            (max(n_parallel + 3, _cells + 1), ubatch),
+        )
+        # Same padding, via the compact-SWA window: a step of one bucket always crosses.
+        ubatch_named = _moves(
+            (n_parallel, ubatch * 2),
+            (n_parallel, max(1, ubatch // 2)),
+            (n_parallel, ubatch + 256),
+        )
+        scales_with_n_max = bool(
+            target_rollback and n_max and self._rollback_state_bytes(n_parallel) > 0
+        )
+        return (
+            f"MTP reserve: {reserve_bytes / (1024**3):.2f} GB "
+            f"(draft KV @ {n_ctx}"
+            + (f" x {n_parallel} slots" if slots_named else "")
+            + (f", ubatch {ubatch}" if ubatch_named else "")
+            + (f", n_max {n_max}" if scales_with_n_max else "")
+            + (", flat-frac fallback" if flat_fallback else "")
+            + "), "
+        )
+
     _DEFAULT_N_UBATCH = _DEFAULT_LLAMA_N_UBATCH
     _COMPUTE_BUFFER_SAFETY = 1.15  # upper-bound margin on the compute-buffer estimate
     # Soft VRAM the modeled terms omit; charged to the fit budget on tight tiers (#6682).
@@ -16319,10 +16383,12 @@ class LlamaCppBackend:
                     "different model, or use this model directly through "
                     "Ollama instead."
                 )
+            # Not "cannot be run": unlike the branches above, this includes an arch the
+            # INSTALLED build predates (qwen4exp ran after a llama.cpp update).
             return (
-                f"llama.cpp does not support this GGUF's model architecture "
-                f"('{arch}'). The file is valid, but this model type cannot "
-                "be run with llama-server."
+                f"The installed llama.cpp does not recognise this GGUF's model "
+                f"architecture ('{arch}'). The file is valid. If the model is newer "
+                "than this llama.cpp build, updating llama.cpp may add support for it."
             )
 
         # Other Ollama compat failures that don't name an arch. Only when
@@ -21147,11 +21213,15 @@ class LlamaCppBackend:
                         else 0
                     )
                     if _mtp_will_engage:
-                        _mtp_note = (
-                            f"MTP reserve: {_mtp_reserve_bytes / (1024**3):.2f} GB "
-                            f"(draft KV @ {effective_ctx} + verify n_max={_mtp_eff_n_max}"
-                            + (", flat-frac fallback" if mtp_overhead_fn is None else "")
-                            + "), "
+                        _mtp_note = self._mtp_reserve_note(
+                            _mtp_reserve_bytes,
+                            n_ctx = effective_ctx,
+                            n_parallel = n_parallel or 1,
+                            n_ubatch = _effective_ubatch,
+                            n_max = _mtp_eff_n_max,
+                            target_rollback = _target_rollback,
+                            flat_fallback = mtp_overhead_fn is None,
+                            reprice = lambda slots, ub: _mtp_bytes(effective_ctx, slots, ub),
                         )
                     else:
                         _mtp_note = ""
@@ -25724,9 +25794,13 @@ class LlamaCppBackend:
         self._cancel_event.set()
         with self._lock:
             self._unload_epoch += 1
+            # Read before the kill clears it: callers unload from a finally either way.
+            _was_resident = self._process is not None
             self._kill_process()
             self._cleanup_cpu_fallback_runtime()
-            logger.info(f"Unloaded GGUF model: {self._model_identifier}")
+            # The one unload line: routes/inference.py logged a second, differently named.
+            if _was_resident:
+                logger.info(f"Unloaded GGUF model: {self._model_identifier}")
             self._model_identifier = None
             self._gguf_path = None
             self._gguf_load_identity = None
