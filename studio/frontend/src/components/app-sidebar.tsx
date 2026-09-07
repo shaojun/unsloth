@@ -2739,6 +2739,18 @@ export function AppSidebar() {
         preloadSilently(router.preloadRoute({ to: "/battleground" }));
       },
     },
+    playground: {
+      icon: GamepadDirectionalIcon,
+      label: t("shell.navigation.playground"),
+      active: pathname === "/playground" || pathname.startsWith("/playground/"),
+      onClick: () => {
+        navigate({ to: "/playground" });
+        closeMobileIfOpen();
+      },
+      onIntent: () => {
+        preloadSilently(router.preloadRoute({ to: "/playground" }));
+      },
+    },
     api: {
       icon: Globe02Icon,
       label: t("shell.navigation.api"),

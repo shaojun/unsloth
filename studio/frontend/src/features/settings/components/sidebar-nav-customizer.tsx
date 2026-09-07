@@ -46,6 +46,7 @@ const ITEM_META: Record<
   recipes: { icon: ChefHatIcon, labelKey: "shell.navigation.recipes" },
   export: { icon: Download01Icon, labelKey: "shell.navigation.export" },
   battleground: { icon: GamepadDirectionalIcon, labelKey: "shell.navigation.battleground" },
+  playground: { icon: GamepadDirectionalIcon, labelKey: "shell.navigation.playground" },
   api: { icon: Globe02Icon, labelKey: "shell.navigation.api" },
 };
 

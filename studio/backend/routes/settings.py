@@ -3906,6 +3906,7 @@ SIDEBAR_NAV_ITEM_DEFAULTS = {
     # Must mirror SIDEBAR_NAV_ITEM_IDS / SIDEBAR_NAV_DEFAULT_PINNED in
     # features/settings/stores/appearance-custom-store.ts, order included.
     "battleground": True,
+    "playground": True,
     "api": False,
 }
 
@@ -3949,6 +3950,7 @@ SidebarNavItemId = Literal[
     "recipes",
     "export",
     "battleground",
+    "playground",
     "api",
 ]
 

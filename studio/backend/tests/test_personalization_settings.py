@@ -205,6 +205,7 @@ FRONTEND_SHIPPED_SIDEBAR_NAV = [
     ("recipes", False),
     ("export", False),
     ("battleground", True),
+    ("playground", True),
     ("api", False),
 ]
 
@@ -247,6 +248,7 @@ def test_customization_sidebar_nav_preserves_order_and_normalizes():
         ("recipes", False),
         ("export", False),
         ("battleground", True),
+        ("playground", True),
         ("api", False),
     ]
 
@@ -546,6 +548,7 @@ def test_personalization_route_roundtrip_real_shape(monkeypatch):
                     {"id": "recipes", "pinned": False},
                     {"id": "export", "pinned": False},
                     {"id": "battleground", "pinned": True},
+                    {"id": "playground", "pinned": True},
                     {"id": "api", "pinned": False},
                 ],
                 # This layout was arranged by hand, so no row is left on a rule.

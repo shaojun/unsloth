@@ -356,6 +356,10 @@ from routes.battleground import (
     public_router as battleground_public_router,
     router as battleground_router,
 )
+from routes.playground import (
+    public_router as playground_public_router,
+    router as playground_router,
+)
 from hub.routes import (
     inventory_router as hub_inventory_router,
     datasets_router as hub_datasets_router,
@@ -827,6 +831,19 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             _lifespan_log.warning("reconcile_orphaned_ingestion_jobs failed at startup: %s", exc)
 
+    # Playground: vLLM servers spawned by a previous backend process did not
+    # survive it; reconcile the instance table so the UI shows the truth.
+    try:
+        from core.inference.vllm import get_vllm_backend
+
+        swept = await asyncio.to_thread(get_vllm_backend().sweep_stale_instances)
+        if swept:
+            _lifespan_log.warning(
+                "Marked %d stale playground vLLM instance(s) stopped.", swept
+            )
+    except Exception as exc:  # noqa: BLE001 -- never block startup
+        _lifespan_log.warning("playground instance sweep failed: %s", exc)
+
     try:
         # The boot pass above only settles runs orphaned by the previous process. A run that wedges while this one
         # keeps serving needs the same reconciliation on an interval, bounded to runs whose progress lease has
@@ -975,6 +992,17 @@ async def lifespan(app: FastAPI):
     from core.inference.llama_http import aclose as _close_llama_http
 
     await _close_llama_http()
+
+    # Stop every playground-hosted vLLM server so shutdown never leaks GPU
+    # processes.
+    try:
+        from core.inference.vllm import stop_all_instances_async
+
+        stopped = await stop_all_instances_async()
+        if stopped:
+            _lifespan_log.info("Stopped %d playground vLLM instance(s).", stopped)
+    except Exception as exc:  # noqa: BLE001 -- shutdown must be best-effort
+        _lifespan_log.warning("playground instance shutdown failed: %s", exc)
 
     await run_lifespan_shutdown(
         terminate_hub_downloads,
@@ -1680,6 +1708,9 @@ app.include_router(preview_router, prefix = "/p", tags = ["preview"])
 # Model Battleground: Studio API + public tester pages (signed links, like /p).
 app.include_router(battleground_router, prefix = "/api/battleground", tags = ["battleground"])
 app.include_router(battleground_public_router, prefix = "/bg", tags = ["battleground"])
+# Model Playground: Studio API + public tester pages (signed links, like /p).
+app.include_router(playground_router, prefix = "/api/playground", tags = ["playground"])
+app.include_router(playground_public_router, prefix = "/pg", tags = ["playground"])
 app.include_router(providers_router, prefix = "/api/providers", tags = ["providers"])
 
 app.include_router(openai_codex_auth_router, prefix = "/api/providers", tags = ["providers"])

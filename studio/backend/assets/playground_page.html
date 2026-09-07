@@ -1,0 +1,825 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>__TITLE__ · Unsloth Playground</title>
+    <style>
+      @font-face {
+        font-family: "Hellix";
+        src: url("/p/_assets/fonts/Hellix-Medium.woff") format("woff");
+        font-weight: 500;
+        font-display: swap;
+      }
+      @font-face {
+        font-family: "Hellix";
+        src: url("/p/_assets/fonts/Hellix-SemiBold.woff2") format("woff2");
+        font-weight: 600;
+        font-display: swap;
+      }
+      :root {
+        color-scheme: light dark;
+        --bg: #fefefd;
+        --fg: #0d0d0d;
+        --muted: #858279;
+        --border: #ececec;
+        --user-bubble: #f5f5f5;
+        --primary: #17b88b;
+        --primary-soft: rgba(23, 184, 139, 0.12);
+        --panel-bg: #ffffff;
+        --composer-bg: #ffffff;
+        --danger: #e5484d;
+        --warn: #f5a623;
+        --composer-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.16);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1a1b1e;
+          --fg: #ececee;
+          --muted: #96979b;
+          --border: #3a3d42;
+          --user-bubble: #2d2e32;
+          --primary: #17b88b;
+          --primary-soft: rgba(23, 184, 139, 0.16);
+          --panel-bg: #202124;
+          --composer-bg: #2d2e32;
+          --composer-shadow: none;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        display: flex;
+        flex-direction: column;
+        font:
+          15px/1.6 "Inter",
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          system-ui,
+          sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      .heading {
+        font-family: "Hellix", "Space Grotesk", system-ui, sans-serif;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 12px 18px;
+        border-bottom: 1px solid var(--border);
+        flex-wrap: wrap;
+      }
+      .brand {
+        font-family: "Hellix", "Space Grotesk", system-ui, sans-serif;
+        font-weight: 600;
+        font-size: 14.5px;
+      }
+      .test-name {
+        font-size: 13.5px;
+        color: var(--muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 40%;
+      }
+      .badge {
+        margin-left: auto;
+        font-size: 11.5px;
+        font-weight: 600;
+        padding: 3px 9px;
+        border-radius: 999px;
+        background: var(--primary-soft);
+        color: var(--primary);
+      }
+      #log {
+        flex: 1;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        padding: 12px 16px 20px;
+      }
+      #thread {
+        width: 100%;
+        max-width: 66rem;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+      .welcome {
+        margin: auto;
+        text-align: center;
+        padding: 24px 16px;
+      }
+      .welcome h1 {
+        margin: 0 0 6px;
+        font-weight: 600;
+        font-size: 26px;
+        letter-spacing: -0.02em;
+      }
+      .welcome p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .user-msg {
+        align-self: flex-end;
+        max-width: 72%;
+        background: var(--user-bubble);
+        border-radius: 16px;
+        padding: 9px 14px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .panels {
+        display: grid;
+        gap: 12px;
+      }
+      .panels.two {
+        grid-template-columns: 1fr 1fr;
+      }
+      @media (max-width: 760px) {
+        .panels.two {
+          grid-template-columns: 1fr;
+        }
+      }
+      .panel {
+        background: var(--panel-bg);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 12px 14px;
+        min-width: 0;
+      }
+      .panel-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--primary);
+        flex: none;
+      }
+      .dot.pending {
+        animation: pulse 1.2s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 0.35;
+        }
+        50% {
+          opacity: 1;
+        }
+      }
+      .panel-title {
+        font-weight: 600;
+        font-size: 13.5px;
+      }
+      .model-name {
+        font-size: 12px;
+        color: var(--primary);
+        font-weight: 600;
+        margin-left: auto;
+        text-align: right;
+        overflow-wrap: anywhere;
+      }
+      .response-text {
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 14px;
+        min-height: 20px;
+      }
+      .response-text .cursor {
+        display: inline-block;
+        width: 7px;
+        height: 15px;
+        background: var(--primary);
+        vertical-align: text-bottom;
+        animation: pulse 0.9s ease-in-out infinite;
+        border-radius: 2px;
+        margin-left: 1px;
+      }
+      .response-error {
+        color: var(--danger);
+        font-size: 13px;
+      }
+      .latency {
+        color: var(--muted);
+        font-size: 11.5px;
+        margin-top: 6px;
+      }
+      .fb-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 10px;
+        flex-wrap: wrap;
+      }
+      .fb-btn {
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--fg);
+        border-radius: 999px;
+        padding: 3px 10px;
+        font-size: 12.5px;
+        cursor: pointer;
+      }
+      .fb-btn:hover {
+        border-color: var(--primary);
+      }
+      .fb-btn.active-good {
+        background: var(--primary-soft);
+        border-color: var(--primary);
+        color: var(--primary);
+        font-weight: 600;
+      }
+      .fb-btn.active-bad {
+        background: rgba(229, 72, 77, 0.12);
+        border-color: var(--danger);
+        color: var(--danger);
+        font-weight: 600;
+      }
+      .fb-detail {
+        display: none;
+        margin-top: 8px;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .fb-detail.open {
+        display: flex;
+      }
+      .tags {
+        display: flex;
+        gap: 5px;
+        flex-wrap: wrap;
+      }
+      .tag {
+        font-size: 11.5px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 2px 8px;
+        cursor: pointer;
+        color: var(--muted);
+      }
+      .tag.selected {
+        border-color: var(--primary);
+        color: var(--primary);
+        background: var(--primary-soft);
+      }
+      textarea.note {
+        width: 100%;
+        min-height: 54px;
+        resize: vertical;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: transparent;
+        color: var(--fg);
+        font: inherit;
+        font-size: 13px;
+        padding: 7px 9px;
+      }
+      .pick-bar {
+        border: 1px dashed var(--border);
+        border-radius: 14px;
+        padding: 10px 14px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .pick-title {
+        font-size: 13px;
+        font-weight: 600;
+        margin-right: 4px;
+      }
+      .pick-btn {
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--fg);
+        border-radius: 999px;
+        padding: 5px 14px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .pick-btn:hover {
+        border-color: var(--primary);
+        color: var(--primary);
+      }
+      .pick-btn.chosen {
+        background: var(--primary-soft);
+        border-color: var(--primary);
+        color: var(--primary);
+        font-weight: 600;
+      }
+      .picked-note {
+        font-size: 12.5px;
+        color: var(--muted);
+      }
+      .reveal-line {
+        font-size: 12.5px;
+        color: var(--primary);
+        font-weight: 600;
+      }
+      footer.composer {
+        border-top: 1px solid var(--border);
+        padding: 12px 16px 16px;
+      }
+      .composer-inner {
+        width: 100%;
+        max-width: 66rem;
+        margin: 0 auto;
+        display: flex;
+        gap: 10px;
+        align-items: flex-end;
+      }
+      textarea#input {
+        flex: 1;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: var(--composer-bg);
+        color: var(--fg);
+        font: inherit;
+        padding: 10px 14px;
+        min-height: 46px;
+        max-height: 180px;
+        resize: none;
+        box-shadow: var(--composer-shadow);
+        outline: none;
+      }
+      textarea#input:focus {
+        border-color: var(--primary);
+      }
+      button#send {
+        border: none;
+        background: var(--primary);
+        color: #fff;
+        font-weight: 600;
+        font-size: 14px;
+        border-radius: 14px;
+        padding: 11px 20px;
+        cursor: pointer;
+      }
+      button#send:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      .error-banner {
+        background: rgba(229, 72, 77, 0.1);
+        color: var(--danger);
+        border-radius: 10px;
+        padding: 8px 12px;
+        font-size: 13px;
+        margin: 0 auto 12px;
+        max-width: 66rem;
+      }
+      .hint {
+        font-size: 12px;
+        color: var(--muted);
+        text-align: center;
+        margin-top: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="brand">Unsloth Playground</span>
+      <span class="test-name" id="test-name"></span>
+      <span class="badge" id="mode-badge"></span>
+    </header>
+    <main id="log">
+      <div id="thread">
+        <div class="welcome" id="welcome">
+          <h1 class="heading">Model test</h1>
+          <p id="welcome-sub">Send a message to compare responses.</p>
+        </div>
+      </div>
+    </main>
+    <footer class="composer">
+      <div class="composer-inner">
+        <textarea id="input" rows="1" placeholder="Type a message…" autofocus></textarea>
+        <button id="send">Send</button>
+      </div>
+      <div class="hint" id="hint"></div>
+    </footer>
+    <script>
+      (() => {
+        "use strict";
+        const FEEDBACK_TAGS = [
+          "correct",
+          "instruction-following",
+          "helpful",
+          "style",
+          "hallucination",
+          "wrong-answer",
+          "refused",
+          "unsafe",
+          "too-verbose",
+          "too-short",
+          "formatting",
+          "other",
+        ];
+        const params = new URLSearchParams(location.search);
+        const token = params.get("k") || "";
+        // Path is /pg/t/{test_id} — the id is the third non-empty segment.
+        const segments = location.pathname.split("/").filter(Boolean);
+        const testId = segments.length >= 3 ? segments[2] : "";
+        const $ = (sel) => document.querySelector(sel);
+        const thread = $("#thread");
+
+        const state = {
+          sessionId: null,
+          labels: [],
+          showModelCards: false,
+          revealAfterVote: true,
+          modelNames: {},
+          busy: false,
+          turns: [], // {el, panels: {label: {textEl, respId, feedback}}}
+        };
+
+        function api(path, opts) {
+          const url = new URL(path, location.origin);
+          url.searchParams.set("k", token);
+          return fetch(url, opts).then(async (resp) => {
+            if (!resp.ok) {
+              let detail = "Request failed (" + resp.status + ")";
+              try {
+                const body = await resp.json();
+                if (typeof body.detail === "string") detail = body.detail;
+              } catch (e) {}
+              throw new Error(detail);
+            }
+            return resp;
+          });
+        }
+
+        function el(tag, cls, text) {
+          const node = document.createElement(tag);
+          if (cls) node.className = cls;
+          if (text != null) node.textContent = text;
+          return node;
+        }
+
+        async function init() {
+          if (!token || !testId) {
+            showError("This link is invalid or incomplete.");
+            return;
+          }
+          try {
+            const resp = await api(`/pg/t/${encodeURIComponent(testId)}/config`);
+            const config = await resp.json();
+            state.sessionId = config.session_id;
+            state.labels = config.labels || [];
+            state.showModelCards = !!config.show_model_cards;
+            state.revealAfterVote = !!config.reveal_after_vote;
+            state.modelNames = config.model_names || {};
+            $("#test-name").textContent = config.test_name || "";
+            document.title = (config.test_name || "Model test") + " · Unsloth Playground";
+            const single = state.labels.length === 1;
+            $("#mode-badge").textContent = single
+              ? "1 model"
+              : state.showModelCards
+                ? state.labels.length + " models · open"
+                : "Blind · " + state.labels.length + " models";
+            $("#welcome-sub").textContent = single
+              ? "Chat with the model and rate its responses."
+              : state.showModelCards
+                ? "Same message goes to every model. Rate responses and pick the best."
+                : "The same message goes to each hidden model. Rate responses, pick the best, then see which was which.";
+            $("#hint").textContent = state.revealAfterVote && !state.showModelCards && !single
+              ? "Model identities are revealed after you pick the best response of a turn."
+              : "";
+          } catch (err) {
+            showError(err.message);
+          }
+        }
+
+        function showError(message) {
+          const banner = el("div", "error-banner", message);
+          thread.prepend(banner);
+        }
+
+        function newTurn(prompt) {
+          $("#welcome") && $("#welcome").remove();
+          const wrap = el("div");
+          wrap.appendChild(el("div", "user-msg", prompt));
+          const panels = el("div", "panels" + (state.labels.length > 1 ? " two" : ""));
+          const turn = { el: wrap, panels: {}, turnId: null, pickDone: false };
+          for (const label of state.labels) {
+            const panel = el("div", "panel");
+            const head = el("div", "panel-head");
+            const dot = el("span", "dot pending");
+            head.appendChild(dot);
+            head.appendChild(el("span", "panel-title", label));
+            if (state.showModelCards && state.modelNames[label]) {
+              head.appendChild(el("span", "model-name", state.modelNames[label]));
+            }
+            panel.appendChild(head);
+            const text = el("div", "response-text");
+            text.appendChild(el("span", "cursor"));
+            panel.appendChild(text);
+            panels.appendChild(panel);
+            turn.panels[label] = {
+              panel,
+              dot,
+              text,
+              respId: null,
+              done: false,
+              error: null,
+              tags: new Set(),
+              rating: null,
+              revealedName: null,
+            };
+          }
+          wrap.appendChild(panels);
+          thread.appendChild(wrap);
+          state.turns.push(turn);
+          $("#log").scrollTop = $("#log").scrollHeight;
+          return turn;
+        }
+
+        function applyEvent(turn, event) {
+          const panelState = turn.panels[event.label];
+          if (!panelState) return;
+          if (event.type === "delta") {
+            const cursor = panelState.text.querySelector(".cursor");
+            if (event.text) panelState.text.insertBefore(document.createTextNode(event.text), cursor);
+          } else if (event.type === "done") {
+            panelState.done = true;
+            panelState.respId = event.response_id;
+            panelState.text.textContent = event.content || "(empty response)";
+            panelState.dot.classList.remove("pending");
+            const meta = [];
+            if (event.latency_ms != null) meta.push((event.latency_ms / 1000).toFixed(1) + "s");
+            if (event.completion_tokens != null) meta.push(event.completion_tokens + " tok");
+            if (meta.length) {
+              panelState.panel.appendChild(el("div", "latency", meta.join(" · ")));
+            }
+            if (event.model_name) panelState.revealedName = event.model_name;
+            panelState.panel.appendChild(buildFeedbackRow(turn, event.label, panelState));
+          } else if (event.type === "error") {
+            panelState.done = true;
+            panelState.error = event.message;
+            panelState.respId = event.response_id || null;
+            panelState.text.textContent = "";
+            panelState.dot.classList.remove("pending");
+            panelState.panel.appendChild(el("div", "response-error", "⚠ " + event.message));
+          }
+          $("#log").scrollTop = $("#log").scrollHeight;
+        }
+
+        function buildFeedbackRow(turn, label, panelState) {
+          const row = el("div", "fb-row");
+          const good = el("button", "fb-btn", "👍 Good");
+          const bad = el("button", "fb-btn", "👎 Bad");
+          good.type = "button";
+          bad.type = "button";
+          row.appendChild(good);
+          row.appendChild(bad);
+          const detail = el("div", "fb-detail");
+
+          const tags = el("div", "tags");
+          for (const tag of FEEDBACK_TAGS) {
+            const chip = el("span", "tag", tag);
+            chip.addEventListener("click", () => {
+              if (chip.classList.contains("selected")) {
+                chip.classList.remove("selected");
+                panelState.tags.delete(tag);
+              } else {
+                chip.classList.add("selected");
+                panelState.tags.add(tag);
+              }
+            });
+            tags.appendChild(chip);
+          }
+          const note = document.createElement("textarea");
+          note.className = "note";
+          note.placeholder = "Optional: what was good or bad about this response?";
+          const send = el("button", "fb-btn", "Save feedback");
+          send.type = "button";
+          send.addEventListener("click", async () => {
+            const rating = panelState.rating;
+            if (!rating || !panelState.respId) return;
+            send.disabled = true;
+            try {
+              await api(`/pg/t/${encodeURIComponent(testId)}/feedback`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  session_id: state.sessionId,
+                  kind: "rating",
+                  turn_id: turn.turnId,
+                  response_id: panelState.respId,
+                  rating: rating,
+                  tags: Array.from(panelState.tags),
+                  comment: note.value.trim() || null,
+                }),
+              });
+              send.textContent = "Saved ✓";
+            } catch (err) {
+              send.disabled = false;
+              send.textContent = err.message;
+            }
+          });
+          detail.appendChild(tags);
+          detail.appendChild(note);
+          detail.appendChild(send);
+          row.appendChild(detail);
+
+          const toggleDetail = () => detail.classList.toggle("open");
+          good.addEventListener("click", () => {
+            panelState.rating = "good";
+            good.classList.add("active-good");
+            bad.classList.remove("active-bad");
+            toggleDetail();
+          });
+          bad.addEventListener("click", () => {
+            panelState.rating = "bad";
+            bad.classList.add("active-bad");
+            good.classList.remove("active-good");
+            toggleDetail();
+          });
+          return row;
+        }
+
+        function buildPickBar(turn) {
+          if (state.labels.length < 2 || turn.pickDone) return;
+          const bar = el("div", "pick-bar");
+          bar.appendChild(el("span", "pick-title", "Which response is best?"));
+          for (const label of state.labels) {
+            const btn = el("button", "pick-btn", label);
+            btn.type = "button";
+            btn.addEventListener("click", () => pickBest(turn, label, btn));
+            bar.appendChild(btn);
+          }
+          const tie = el("button", "pick-btn", "🤝 Tie");
+          tie.type = "button";
+          tie.addEventListener("click", () => pickBest(turn, "__tie__", tie));
+          bar.appendChild(tie);
+          turn.el.appendChild(bar);
+          $("#log").scrollTop = $("#log").scrollHeight;
+        }
+
+        async function pickBest(turn, label, btn) {
+          if (turn.pickDone) return;
+          let chosenResponseId = null;
+          if (label !== "__tie__") {
+            chosenResponseId = turn.panels[label].respId;
+          } else {
+            // A tie still counts as a pick_best with the first response id
+            // chosen == itself; server records no winner that way? We mark tie
+            // by choosing no explicit winner: use chosen of first panel + note.
+            chosenResponseId = turn.panels[state.labels[0]].respId;
+          }
+          if (!chosenResponseId) return;
+          btn.classList.add("chosen");
+          turn.pickDone = true;
+          document.querySelectorAll(".pick-btn").forEach((b) => (b.disabled = true));
+          try {
+            const resp = await api(`/pg/t/${encodeURIComponent(testId)}/feedback`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                session_id: state.sessionId,
+                kind: "pick_best",
+                turn_id: turn.turnId,
+                chosen_response_id: chosenResponseId,
+                comment: label === "__tie__" ? "(reported tie)" : null,
+              }),
+            });
+            const data = await resp.json();
+            if (data.revealed) {
+              applyReveal(turn, data.revealed);
+            } else if (state.revealAfterVote) {
+              const revealResp = await api(
+                `/pg/t/${encodeURIComponent(testId)}/reveal/${encodeURIComponent(turn.turnId)}`,
+                { method: "POST" },
+              );
+              const revealData = await revealResp.json();
+              if (revealData.revealed) applyReveal(turn, revealData.model_names);
+            }
+          } catch (err) {
+            showError(err.message);
+            turn.pickDone = false;
+            btn.classList.remove("chosen");
+          }
+        }
+
+        function applyReveal(turn, modelNames) {
+          for (const [label, name] of Object.entries(modelNames || {})) {
+            const panelState = turn.panels[label];
+            if (!panelState) continue;
+            const head = panelState.panel.querySelector(".panel-head");
+            if (head && !head.querySelector(".model-name")) {
+              head.appendChild(el("span", "model-name", name));
+            }
+          }
+          const line = el("div", "reveal-line", "🔒 Identities revealed — thanks for voting!");
+          turn.el.appendChild(line);
+          $("#log").scrollTop = $("#log").scrollHeight;
+        }
+
+        async function send() {
+          const input = $("#input");
+          const message = input.value.trim();
+          if (!message || state.busy || !state.sessionId) return;
+          state.busy = true;
+          $("#send").disabled = true;
+          input.value = "";
+          input.style.height = "auto";
+          const turn = newTurn(message);
+          try {
+            const resp = await fetch(
+              `/pg/t/${encodeURIComponent(testId)}/chat?k=${encodeURIComponent(token)}`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ session_id: state.sessionId, message }),
+              },
+            );
+            if (!resp.ok || !resp.body) {
+              let detail = "Chat failed (" + resp.status + ")";
+              try {
+                const body = await resp.json();
+                if (typeof body.detail === "string") detail = body.detail;
+              } catch (e) {}
+              throw new Error(detail);
+            }
+            const reader = resp.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+            let doneCount = 0;
+            let seenTurnId = false;
+            while (true) {
+              const { value, done } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              let idx;
+              while ((idx = buffer.indexOf("\n\n")) >= 0) {
+                const frame = buffer.slice(0, idx);
+                buffer = buffer.slice(idx + 2);
+                if (!frame.startsWith("data:")) continue;
+                let event;
+                try {
+                  event = JSON.parse(frame.slice(5).trim());
+                } catch (e) {
+                  continue;
+                }
+                if (event.type === "turn" && !seenTurnId) {
+                  turn.turnId = event.turn_id;
+                  seenTurnId = true;
+                  continue;
+                }
+                if (event.type === "turn_done") {
+                  buildPickBar(turn);
+                  continue;
+                }
+                if (event.type === "delta" || event.type === "done" || event.type === "error") {
+                  applyEvent(turn, event);
+                  if (event.type === "done" || event.type === "error") doneCount++;
+                }
+              }
+            }
+            if (doneCount === 0) {
+              showError("The server closed the connection before any model responded.");
+            }
+          } catch (err) {
+            showError(err.message);
+          } finally {
+            state.busy = false;
+            $("#send").disabled = false;
+            input.focus();
+          }
+        }
+
+        $("#send").addEventListener("click", send);
+        $("#input").addEventListener("keydown", (event) => {
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            send();
+          }
+        });
+        $("#input").addEventListener("input", (event) => {
+          const node = event.target;
+          node.style.height = "auto";
+          node.style.height = Math.min(180, node.scrollHeight) + "px";
+        });
+
+        init();
+      })();
+    </script>
+  </body>
+</html>

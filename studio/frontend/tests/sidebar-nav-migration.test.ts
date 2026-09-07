@@ -138,11 +138,12 @@ test("a customized version-5 sidebar keeps its order and only gains the rows add
   // Rows added after this customized layout are appended in current ID order.
   assert.deepEqual(
     customization.sidebarNav.map((item) => item.id),
-    [...customizedV5.map((item) => item.id), "library", "audio", "battleground"],
+    [...customizedV5.map((item) => item.id), "library", "audio", "battleground", "playground"],
   );
-  // The last appended row (Audio) is unpinned; the Battleground row after it
-  // carries its own default (pinned).
-  assert.equal(customization.sidebarNav.at(-2)?.pinned, false);
+  assert.equal(
+    customization.sidebarNav.find((item) => item.id === "audio")?.pinned,
+    false,
+  );
 });
 
 test("a user-arranged sidebar survives the migration", () => {
@@ -173,6 +174,7 @@ test("version-6 installs adopt the combined sidebar default", () => {
     "images",
     "train",
     "battleground",
+    "playground",
   ]);
 });
 

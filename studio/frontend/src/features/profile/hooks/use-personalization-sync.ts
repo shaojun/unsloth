@@ -36,8 +36,8 @@ import type { AvatarShape } from "../stores/user-profile-store";
 const PUSH_DEBOUNCE_MS = 800;
 
 // V1 stored the resolved locale; V2 stores the user's language preference.
-// V3-V6 migrate shipped sidebar layouts for synced profiles.
-const PERSONALIZATION_VERSION = 6;
+// V3-V7 migrate shipped sidebar layouts for synced profiles.
+const PERSONALIZATION_VERSION = 7;
 
 type ProfileSnapshot = {
   displayName: string;
