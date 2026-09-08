@@ -52,6 +52,9 @@ _CONTINUATION_FLAG_PROVIDERS = frozenset({"vllm", "llama_cpp"})
 # which reports usage on its own.
 _USAGE_STREAM_OPTION_PROVIDERS = frozenset({"vllm", "openrouter", "kimi"})
 
+# llama-server reads repeat_penalty, not repetition_penalty (as routes/inference does).
+_REPETITION_PENALTY_BODY_KEY = {"llama_cpp": "repeat_penalty"}
+
 # structlog so INFO diagnostics reach the backend's JSON log stream (the
 # stdlib root logger defaults to WARNING with no handlers). It accepts the
 # existing printf-style positional args.
@@ -1118,6 +1121,8 @@ class ExternalProviderClient:
         max_tokens: Optional[int] = None,
         presence_penalty: float = 0.0,
         top_k: Optional[int] = None,
+        min_p: Optional[float] = None,
+        repetition_penalty: Optional[float] = None,
         enable_thinking: Optional[bool] = None,
         reasoning_effort: Optional[str] = None,
         enabled_tools: Optional[list[str]] = None,
@@ -1139,10 +1144,9 @@ class ExternalProviderClient:
         OpenAI-compatible providers forward lines verbatim. For Anthropic, the
         native Messages API SSE is translated to OpenAI format.
 
-        ``top_k`` and ``presence_penalty`` are forwarded only when the caller
-        supplies a value the provider accepts; the frontend's
-        provider-capability map already filters these per provider, so they're
-        opt-in here.
+        ``top_k``, ``min_p``, ``repetition_penalty`` and ``presence_penalty``
+        are opt-in: forwarded only when supplied, since the frontend's
+        capability map already filters them per provider.
 
         ``fast_mode`` only applies to Anthropic Opus 5 / Opus 4.8 (silently
         dropped elsewhere); adds the beta header and ``speed: "fast"``.
@@ -1294,6 +1298,14 @@ class ExternalProviderClient:
                 body["max_completion_tokens"] = max_tokens
             else:
                 body["max_tokens"] = max_tokens
+        if top_k is not None:
+            body["top_k"] = top_k
+        if min_p is not None:
+            body["min_p"] = min_p
+        if repetition_penalty is not None:
+            body[_REPETITION_PENALTY_BODY_KEY.get(self.provider_type, "repetition_penalty")] = (
+                repetition_penalty
+            )
 
         # Drop fields the registry flags as unusable so reasoning-class models
         # with fixed defaults (Kimi k2.6 etc) don't 400 on pydantic defaults
