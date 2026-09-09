@@ -78,8 +78,6 @@ export interface TrainingStartRequest {
   enable_tensorboard: boolean;
   tensorboard_dir: string | null;
   resume_from_checkpoint?: string | null;
-  /** Acknowledged playground-hosted models are running; train anyway (GPU contention warning). */
-  confirm_playground_instances?: boolean;
 }
 
 export interface TrainingStartResponse {

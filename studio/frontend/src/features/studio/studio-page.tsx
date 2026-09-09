@@ -40,7 +40,6 @@ import {
   studioTourSteps,
   studioTrainingTourSteps,
 } from "./tour";
-import { PlaygroundTrainingConflictDialog } from "@/features/playground";
 import {
   type TrainSubTab,
   getStudioSubtitle,
@@ -305,8 +304,6 @@ export function StudioPage(): ReactElement {
             initialData={dialogInitial}
             isVlm={config.isVisionModel && config.isDatasetImage === true}
           />
-
-          <PlaygroundTrainingConflictDialog />
         </div>
       </Tabs>
     </div>

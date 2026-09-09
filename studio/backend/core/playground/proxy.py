@@ -3,12 +3,10 @@
 
 """Chat-completion proxying for Model Playground sources.
 
-A playground *source* is one of:
-
-* ``external_openai`` — an OpenAI-compatible endpoint (base URL + optional API
-  key + model id). Proxied server-side so tester browsers never see the key.
-* a hosted vLLM instance — resolved through ``core.inference.vllm`` by
-  instance id, or by finding the running instance of a local source.
+A playground *source* is an OpenAI-compatible endpoint (base URL + optional
+API key + model id) — typically a ``vllm serve`` instance the user started
+themselves on this machine. Proxied server-side so tester browsers never see
+the key.
 
 All requests go out as standard OpenAI ``/chat/completions`` calls with SSE
 streaming, which vLLM, llama.cpp's server, OpenAI, and every compatible
@@ -27,7 +25,6 @@ import httpx
 
 from loggers import get_logger
 
-from storage import playground_db
 from storage.credential_secrets import get_secret
 
 logger = get_logger(__name__)
@@ -47,7 +44,7 @@ class SourceDownError(PlaygroundProxyError):
 
 
 class SourceNotReadyError(PlaygroundProxyError):
-    """A hosted instance exists but is not running."""
+    """The source cannot be called right now."""
 
 
 @dataclass
@@ -58,7 +55,6 @@ class ProxyTarget:
     model: str
     api_key: Optional[str] = None
     source_kind: str = "external_openai"
-    instance_id: Optional[str] = None
     model_identity: str = ""  # Human-readable real identity for storage.
 
 
@@ -72,42 +68,27 @@ def resolve_source_api_key(source: dict) -> Optional[str]:
 def resolve_source_target(source: dict) -> ProxyTarget:
     """Resolve a source row into a concrete proxy target.
 
-    For hosted sources this prefers the live vLLM instance registered for the
-    source. External sources resolve directly.
+    Sources are OpenAI-compatible endpoints (e.g. a manually started
+    ``vllm serve`` instance); they resolve directly.
     """
     kind = source["kind"]
-    if kind == "external_openai":
-        base_url = (source.get("ref") or "").rstrip("/")
-        if not base_url:
-            raise PlaygroundProxyError(f"Source '{source['name']}' has no base URL")
-        return ProxyTarget(
-            base_url = base_url,
-            model = source.get("external_model") or "",
-            api_key = resolve_source_api_key(source),
-            source_kind = kind,
-            model_identity = f"{source['name']} · {source.get('external_model') or base_url}",
+    if kind != "external_openai":
+        # Legacy rows (local_dir / hf_model) predate manual hosting: the app
+        # no longer starts inference servers, so they cannot be called.
+        raise SourceNotReadyError(
+            f"Source '{source['name']}' is a {kind} entry and the app no longer "
+            "hosts models itself. Serve it with `vllm serve` manually, then "
+            "add the endpoint as a source (Models tab)."
         )
-
-    # local_dir / hf_model: proxy through a hosted vLLM instance of the source.
-    from core.inference.vllm import get_vllm_backend
-
-    backend = get_vllm_backend()
-    for instance in playground_db.list_running_instances():
-        if instance["source_id"] == source["id"] and instance["status"] == "running":
-            info = backend.proxy_info(instance["id"])
-            if info is None:
-                continue
-            return ProxyTarget(
-                base_url = info["base_url"],
-                model = instance["model_slug"],
-                api_key = info["api_key"],
-                source_kind = "hosted_vllm",
-                instance_id = instance["id"],
-                model_identity = f"{source['name']} · vLLM",
-            )
-    raise SourceNotReadyError(
-        f"Source '{source['name']}' has no running hosted instance. "
-        "Start hosting it first (Models tab)."
+    base_url = (source.get("ref") or "").rstrip("/")
+    if not base_url:
+        raise PlaygroundProxyError(f"Source '{source['name']}' has no base URL")
+    return ProxyTarget(
+        base_url = base_url,
+        model = source.get("external_model") or "",
+        api_key = resolve_source_api_key(source),
+        source_kind = kind,
+        model_identity = f"{source['name']} · {source.get('external_model') or base_url}",
     )
 
 
@@ -362,54 +343,43 @@ async def stream_chat_completion(
 async def test_source_connection(source: dict) -> dict:
     """Probe a source endpoint: list models / check reachability."""
     kind = source["kind"]
-    if kind == "external_openai":
-        base_url = (source.get("ref") or "").rstrip("/")
-        headers = {}
-        api_key = resolve_source_api_key(source)
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-        try:
-            async with httpx.AsyncClient(
-                timeout = httpx.Timeout(20.0, connect = _CONNECT_TIMEOUT_S),
-                trust_env = False,
-                headers = headers,
-            ) as client:
-                response = await client.get(f"{base_url}/models")
-        except httpx.HTTPError as exc:
-            return {"ok": False, "error": f"Unreachable: {exc}", "models": []}
-        if response.status_code >= 400:
-            return {
-                "ok": False,
-                "error": f"HTTP {response.status_code}",
-                "models": [],
-            }
-        models: list[str] = []
-        try:
-            data = response.json()
-            for item in data.get("data") or []:
-                model_id = item.get("id")
-                if model_id:
-                    models.append(str(model_id))
-        except (json.JSONDecodeError, AttributeError):
-            pass
-        return {"ok": True, "models": models}
-
-    # Hosted sources: check whether any instance of the source is running.
-    from core.inference.vllm import get_vllm_backend
-
-    backend = get_vllm_backend()
-    running = [
-        instance
-        for instance in playground_db.list_running_instances()
-        if instance["source_id"] == source["id"]
-    ]
-    if not running:
+    if kind != "external_openai":
         return {
             "ok": False,
-            "error": "Not hosted. Start hosting this model first.",
+            "error": (
+                "This source is a local/HF entry and the app no longer hosts "
+                "models. Serve it with `vllm serve` manually and add the "
+                "endpoint instead."
+            ),
             "models": [],
         }
-    info = backend.proxy_info(running[0]["id"])
-    if info is None:
-        return {"ok": False, "error": "Hosted server is not responding.", "models": []}
-    return {"ok": True, "models": [running[0]["model_slug"]]}
+    base_url = (source.get("ref") or "").rstrip("/")
+    headers = {}
+    api_key = resolve_source_api_key(source)
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        async with httpx.AsyncClient(
+            timeout = httpx.Timeout(20.0, connect = _CONNECT_TIMEOUT_S),
+            trust_env = False,
+            headers = headers,
+        ) as client:
+            response = await client.get(f"{base_url}/models")
+    except httpx.HTTPError as exc:
+        return {"ok": False, "error": f"Unreachable: {exc}", "models": []}
+    if response.status_code >= 400:
+        return {
+            "ok": False,
+            "error": f"HTTP {response.status_code}",
+            "models": [],
+        }
+    models: list[str] = []
+    try:
+        data = response.json()
+        for item in data.get("data") or []:
+            model_id = item.get("id")
+            if model_id:
+                models.append(str(model_id))
+    except (json.JSONDecodeError, AttributeError):
+        pass
+    return {"ok": True, "models": models}

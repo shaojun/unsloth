@@ -5,9 +5,11 @@
 
 Two routers:
 
-* ``router`` — authenticated Studio API under ``/api/playground``. Sources,
-  hosted vLLM instances, play sessions, feedback, A/B tests, prompt sets,
-  LLM-as-judge runs, reports and dataset exports.
+* ``router`` — authenticated Studio API under ``/api/playground``. Model
+  sources (external OpenAI-compatible endpoints — typically a ``vllm serve``
+  instance the user started manually), hosting hint data (successfully trained
+  runs and their output paths), play sessions, feedback, A/B tests, prompt
+  sets, LLM-as-judge runs, reports and dataset exports.
 * ``public_router`` — public tester pages under ``/pg`` (short prefix like the
   ``/p`` preview pages): a signed-link chat page that fans each message out to
   every model slot with anonymous labels, collects per-response ratings and a
@@ -23,32 +25,25 @@ import io
 import json
 import math
 import random
-import secrets
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 from loggers import get_logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from auth.authentication import get_current_subject
 from core.playground import judge as playground_judge
 from core.playground.proxy import (
     PlaygroundProxyError,
-    SourceDownError,
-    SourceNotReadyError,
     resolve_source_target,
     stream_chat_completion,
     test_source_connection,
 )
-from core.inference.vllm import VllmNotInstalledError, get_vllm_backend
-from core.inference.vllm_args import VllmArgsError, validate_vllm_args
 from models.playground import (
     PlaygroundChatRequest,
     PlaygroundFeedbackRequest,
-    PlaygroundInstanceCreate,
     PlaygroundJudgeRunCreate,
     PlaygroundPlaySessionCreate,
     PlaygroundPromptAdd,
@@ -65,11 +60,9 @@ from storage.credential_secrets import (
     upsert_secret,
 )
 from utils.client_ip import client_ip
-from utils.paths import resolve_output_dir, studio_root
+from utils.paths import resolve_output_dir
 from utils.playground_settings import (
-    get_playground_gpu_budget,
     get_playground_sharing_enabled,
-    set_playground_gpu_budget,
     set_playground_sharing_enabled,
 )
 from utils.playground_token import sign_playground_ref, verify_playground_ref
@@ -113,16 +106,12 @@ def _spawn_background(coro) -> asyncio.Task:
     return task
 
 
-def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii = False)}\n\n"
 
 
 # ---------------------------------------------------------------------------
-# Settings / availability
+# Settings
 # ---------------------------------------------------------------------------
 
 
@@ -130,13 +119,11 @@ def _sse(payload: dict) -> str:
 def get_playground_settings(current_subject: str = Depends(get_current_subject)):
     return {
         "public_sharing_enabled": get_playground_sharing_enabled(),
-        "gpu_budget": get_playground_gpu_budget(),
     }
 
 
 class PlaygroundSettingsUpdate(BaseModel):
     public_sharing_enabled: Optional[bool] = None
-    gpu_budget: Optional[float] = Field(None, ge = 0.05, le = 1.0)
 
 
 @router.put("/settings")
@@ -148,14 +135,7 @@ def update_playground_settings(
         result["public_sharing_enabled"] = set_playground_sharing_enabled(
             payload.public_sharing_enabled
         )
-    if payload.gpu_budget is not None:
-        result["gpu_budget"] = set_playground_gpu_budget(payload.gpu_budget)
     return result
-
-
-@router.get("/vllm/availability")
-def vllm_availability(current_subject: str = Depends(get_current_subject)):
-    return get_vllm_backend().availability()
 
 
 # ---------------------------------------------------------------------------
@@ -177,22 +157,6 @@ def _serialize_source(source: dict) -> dict:
     }
 
 
-def _resolve_local_source_ref(ref: str) -> Path:
-    """Resolve a local_dir source ref (absolute or outputs-relative)."""
-    candidate = Path(ref).expanduser()
-    if not candidate.is_absolute():
-        try:
-            candidate = resolve_output_dir(ref)
-        except (ValueError, FileNotFoundError) as exc:
-            raise HTTPException(
-                status_code = 400,
-                detail = f"Unknown local model path or training run: {ref}",
-            ) from exc
-    if not candidate.exists():
-        raise HTTPException(status_code = 400, detail = f"Path does not exist: {candidate}")
-    return candidate
-
-
 @router.get("/sources")
 def list_sources(current_subject: str = Depends(get_current_subject)):
     return [_serialize_source(s) for s in playground_db.list_sources()]
@@ -202,26 +166,15 @@ def list_sources(current_subject: str = Depends(get_current_subject)):
 def create_source(
     payload: PlaygroundSourceCreate, current_subject: str = Depends(get_current_subject)
 ):
-    if payload.kind == "local_dir":
-        path = _resolve_local_source_ref(payload.ref)
-        ref = str(path)
-        if not (path / "config.json").exists() and not (path / "adapter_config.json").exists():
-            raise HTTPException(
-                status_code = 400,
-                detail = "Not a model directory (no config.json or adapter_config.json)",
-            )
-    else:
-        ref = payload.ref.strip()
-
     source = playground_db.create_source(
         kind = payload.kind,
         name = payload.name.strip(),
-        ref = ref,
+        ref = payload.ref.strip(),
         external_model = (payload.external_model or "").strip() or None,
         api_key_set = False,
         notes = payload.notes,
     )
-    if payload.kind == "external_openai" and payload.api_key:
+    if payload.api_key:
         upsert_secret("playground_api_key", source["id"], payload.api_key)
         playground_db.update_source(source["id"], api_key_set = True)
         source = playground_db.get_source(source["id"]) or source
@@ -237,13 +190,10 @@ def update_source(
     existing = playground_db.get_source(source_id)
     if existing is None:
         raise HTTPException(status_code = 404, detail = "Source not found")
-    ref = payload.ref
-    if ref is not None and existing["kind"] == "local_dir":
-        ref = str(_resolve_local_source_ref(ref))
     updated = playground_db.update_source(
         source_id,
         name = payload.name,
-        ref = ref,
+        ref = payload.ref.strip() if payload.ref is not None else None,
         external_model = payload.external_model,
         notes = payload.notes,
     )
@@ -255,12 +205,6 @@ def update_source(
 
 @router.delete("/sources/{source_id}")
 def delete_source(source_id: str, current_subject: str = Depends(get_current_subject)):
-    for instance in playground_db.list_running_instances():
-        if instance["source_id"] == source_id:
-            raise HTTPException(
-                status_code = 409,
-                detail = "Stop the hosted instance for this source before deleting it.",
-            )
     if not playground_db.delete_source(source_id):
         raise HTTPException(status_code = 404, detail = "Source not found")
     delete_secret("playground_api_key", source_id)
@@ -276,261 +220,59 @@ async def test_source(source_id: str, current_subject: str = Depends(get_current
 
 
 # ---------------------------------------------------------------------------
-# Hosted instances
+# Manual vLLM hosting hints
 # ---------------------------------------------------------------------------
 
 
-@router.get("/instances")
-def list_instances(current_subject: str = Depends(get_current_subject)):
-    backend = get_vllm_backend()
-    out = []
-    for record in playground_db.list_instances():
-        alive = backend.instance_alive(record["id"])
-        if record["status"] in {"running", "loading", "merging"} and not alive:
-            record = (
-                playground_db.update_instance(
-                    record["id"],
-                    status = "stopped",
-                    stopped_at = _utcnow_iso(),
-                    error = "Server process is not running.",
-                )
-                or record
-            )
-        source = playground_db.get_source(record["source_id"])
-        out.append({**record, "source_name": source["name"] if source else None})
-    return out
-
-
-@router.post("/instances")
-async def create_instance(
-    payload: PlaygroundInstanceCreate, current_subject: str = Depends(get_current_subject)
-):
-    source = playground_db.get_source(payload.source_id)
-    if source is None:
-        raise HTTPException(status_code = 404, detail = "Source not found")
-    if source["kind"] == "external_openai":
-        raise HTTPException(
-            status_code = 400,
-            detail = "External sources don't need hosting; use them directly in tests.",
-        )
-
-    availability = get_vllm_backend().availability()
-    if not availability["installed"]:
-        raise HTTPException(
-            status_code = 409,
-            detail = availability["reason"] or "vLLM is not installed on this machine.",
-        )
-
-    try:
-        args = validate_vllm_args(payload.vllm_args, payload.extra_args)
-    except VllmArgsError as exc:
-        raise HTTPException(status_code = 400, detail = str(exc)) from exc
-
-    # Shared GPU budget across concurrent instances.
-    requested = args.gpu_memory_utilization if args.gpu_memory_utilization is not None else 0.9
-    in_use = 0.0
-    for instance in playground_db.list_running_instances():
-        in_use += instance.get("gpu_memory_utilization") or 0.9
-    budget = get_playground_gpu_budget()
-    if in_use + requested > budget + 1e-6:
-        raise HTTPException(
-            status_code = 409,
-            detail = (
-                f"Hosting this model would exceed the playground GPU budget "
-                f"({in_use:.2f} already reserved + {requested:.2f} requested > "
-                f"{budget:.2f}). Stop another instance or lower "
-                "--gpu-memory-utilization."
-            ),
-        )
-
-    # Merge LoRA adapters before serving: vLLM wants full weights.
-    model_path = _hostable_model_path(source)
-    status = "loading"
-    if model_path is None:
-        status = "merging"
-    elif isinstance(model_path, str) and model_path.startswith("hf:"):
-        model_path = model_path[3:]
-
-    name = payload.name or source["name"]
-    slug = _slugify(name) or "playground-model"
-    # Slugs must be unique among running instances.
-    existing_slugs = {inst["model_slug"] for inst in playground_db.list_running_instances()}
-    if slug in existing_slugs:
-        slug = f"{slug}-{secrets.token_hex(2)}"
-
-    instance = playground_db.create_instance(
-        source_id = source["id"],
-        name = name,
-        model_slug = slug,
-        vllm_args = args.to_json(),
-        gpu_memory_utilization = requested,
-    )
-    _spawn_background(_host_instance_lifecycle(instance["id"], source, model_path, args))
-    return playground_db.get_instance(instance["id"])
-
-
-def _hostable_model_path(source: dict) -> Optional[str | Path]:
-    """What to serve. ``None`` means "merge the LoRA adapter first"."""
-    if source["kind"] == "hf_model":
-        return f"hf:{source['ref']}"
-    path = Path(source["ref"])
-    if (path / "config.json").exists():
-        return path
-    if (path / "adapter_config.json").exists():
+def _resolve_run_output_path(output_dir: Optional[str]) -> Optional[Path]:
+    """Absolute on-disk path for a training run's output_dir, if known."""
+    if not output_dir or not str(output_dir).strip():
         return None
-    raise HTTPException(status_code = 400, detail = "Not a servable model directory")
-
-
-def _slugify(name: str) -> str:
-    import re
-    slug = re.sub(r"[^a-zA-Z0-9-]+", "-", name).strip("-").lower()
-    return slug[:60]
-
-
-async def _host_instance_lifecycle(instance_id: str, source: dict, model_path, args) -> None:
-    """Background: merge (if LoRA) → spawn vLLM → mark running. Never raises."""
+    raw = str(output_dir).strip()
     try:
-        if model_path is None:
-            playground_db.update_instance(instance_id, status = "merging")
-            merged_dir = await asyncio.to_thread(_merge_source, source, instance_id)
-            playground_db.update_instance(instance_id, merged_dir = str(merged_dir))
-            model_path = merged_dir
-        playground_db.update_instance(instance_id, status = "loading")
-        handle = await asyncio.to_thread(
-            get_vllm_backend().start_instance,
-            instance_id,
-            str(model_path),
-            playground_db.get_instance(instance_id)["model_slug"],
-            args,
-        )
-        playground_db.update_instance(
-            instance_id,
-            status = "running",
-            port = handle.port,
-            pid = handle.popen.pid,
-            started_at = _utcnow_iso(),
-            error = None,
-        )
-        _sync_instance_provider(instance_id)
-        logger.info("Playground instance %s running on port %s", instance_id, handle.port)
-    except VllmNotInstalledError as exc:
-        playground_db.update_instance(
-            instance_id, status = "error", error = str(exc), stopped_at = _utcnow_iso()
-        )
-    except Exception as exc:  # noqa: BLE001 -- background lifecycle task
-        logger.error("Playground instance %s failed: %s", instance_id, exc, exc_info = True)
-        playground_db.update_instance(
-            instance_id, status = "error", error = str(exc)[:2000], stopped_at = _utcnow_iso()
-        )
-        get_vllm_backend().stop_instance(instance_id)
+        return resolve_output_dir(raw)
+    except ValueError:
+        native = Path(raw).expanduser()
+        return native if native.is_absolute() else None
 
 
-def _merge_source(source: dict, instance_id: str) -> Path:
-    """Merge a LoRA adapter into full weights via the export orchestrator."""
-    from core.export.orchestrator import get_export_backend
-
-    adapter_path = Path(source["ref"])
-    merge_root = studio_root() / "playground-merges"
-    merge_root.mkdir(parents = True, exist_ok = True)
-    merged_dir = merge_root / f"{_slugify(source['name'])}-{instance_id}"
-    merged_dir.mkdir(parents = True, exist_ok = True)
-
-    backend = get_export_backend()
-    success, message = backend.load_checkpoint(checkpoint_path = str(adapter_path))
-    if not success:
-        raise RuntimeError(f"Loading checkpoint for merge failed: {message}")
-    success, message, output_path = backend.export_merged_model(
-        save_directory = str(merged_dir), format_type = "16-bit (FP16)"
-    )
-    if not success:
-        raise RuntimeError(f"Merging failed: {message}")
-    return Path(output_path) if output_path else merged_dir
-
-
-def _sync_instance_provider(instance_id: str) -> None:
-    """Register the hosted instance as a chat provider so Studio chat and any
-    OpenAI-compatible client can use it ("hosted for later use")."""
-    try:
-        from storage import providers_db
-
-        instance = playground_db.get_instance_with_key(instance_id)
-        if instance is None or instance["status"] != "running":
-            return
-        provider_id = f"playground:{instance_id}"
-        base_url = f"http://127.0.0.1:{instance['port']}/v1"
-        existing = providers_db.get_provider(provider_id)
-        if existing is None:
-            providers_db.create_provider(
-                id = provider_id,
-                provider_type = "vllm",
-                display_name = f"Playground: {instance['name']}",
-                base_url = base_url,
-                models = [instance["model_slug"]],
-                available_models = [instance["model_slug"]],
-            )
-        else:
-            providers_db.update_provider(
-                provider_id, base_url = base_url, models = [instance["model_slug"]]
-            )
-        if instance.get("api_key"):
-            from storage.credential_secrets import save_provider_api_key
-            save_provider_api_key(provider_id, instance["api_key"])
-    except Exception as exc:  # noqa: BLE001 -- provider sync is best-effort
-        logger.warning("Playground provider sync failed: %s", exc)
-
-
-@router.post("/instances/{instance_id}/stop")
-async def stop_instance(instance_id: str, current_subject: str = Depends(get_current_subject)):
-    instance = playground_db.get_instance(instance_id)
-    if instance is None:
-        raise HTTPException(status_code = 404, detail = "Instance not found")
-    playground_db.update_instance(instance_id, status = "stopping")
-    await asyncio.to_thread(get_vllm_backend().stop_instance, instance_id)
-    _remove_instance_provider(instance_id)
-    playground_db.update_instance(
-        instance_id,
-        status = "stopped",
-        stopped_at = _utcnow_iso(),
-        clear = ["port", "pid"],
-    )
-    return playground_db.get_instance(instance_id)
-
-
-def _remove_instance_provider(instance_id: str) -> None:
-    try:
-        from storage import providers_db
-        from storage.credential_secrets import delete_provider_api_key
-
-        provider_id = f"playground:{instance_id}"
-        providers_db.delete_provider(provider_id)
-        delete_provider_api_key(provider_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Playground provider removal failed: %s", exc)
-
-
-@router.delete("/instances/{instance_id}")
-async def delete_instance(instance_id: str, current_subject: str = Depends(get_current_subject)):
-    instance = playground_db.get_instance(instance_id)
-    if instance is None:
-        raise HTTPException(status_code = 404, detail = "Instance not found")
-    if instance["status"] in {"running", "loading", "merging", "stopping"}:
-        await asyncio.to_thread(get_vllm_backend().stop_instance, instance_id)
-        _remove_instance_provider(instance_id)
-    playground_db.delete_instance(instance_id)
-    return {"ok": True}
-
-
-@router.get("/instances/{instance_id}/logs")
-def instance_logs(
-    instance_id: str,
-    tail: int = Query(200, ge = 1, le = 2000),
+@router.get("/trained-models")
+def trained_models(
+    limit: int = Query(50, ge = 1, le = 200),
     current_subject: str = Depends(get_current_subject),
 ):
-    instance = playground_db.get_instance(instance_id)
-    if instance is None:
-        raise HTTPException(status_code = 404, detail = "Instance not found")
-    logs = get_vllm_backend().read_logs(instance_id, tail_bytes = tail * 120)
-    return {"logs": logs or ""}
+    """Successfully trained runs (status ``completed``) with absolute output paths.
+
+    Feeds the Models-tab hosting hints: the app does not start inference
+    servers itself — users copy a ``vllm serve <output_path>`` command into a
+    terminal, then register the resulting endpoint as a playground source.
+    """
+    from storage.studio_db import list_runs
+
+    models = []
+    for row in list_runs(limit = limit, offset = 0)["runs"]:
+        if row.get("status") != "completed":
+            continue
+        path = _resolve_run_output_path(row.get("output_dir"))
+        if path is None:
+            continue
+        if (path / "config.json").exists():
+            artifact = "model"
+        elif (path / "adapter_config.json").exists():
+            artifact = "adapter"
+        else:
+            artifact = "missing"
+        models.append(
+            {
+                "run_id": row["id"],
+                "name": row.get("display_name") or row.get("model_name") or row["id"],
+                "model_name": row.get("model_name"),
+                "output_dir": str(path),
+                "artifact": artifact,
+                "finished_at": row.get("ended_at"),
+            }
+        )
+    return {"models": models}
 
 
 # ---------------------------------------------------------------------------
@@ -643,7 +385,6 @@ async def play_session_chat(
                 session_id = session_id,
                 source_id = source["id"],
                 model_identity = target.model_identity or source["name"],
-                instance_id = target.instance_id,
                 content = final.get("content", "".join(content_parts)),
                 reasoning = final.get("reasoning") or ("".join(reasoning_parts) or None),
                 latency_ms = final.get("latency_ms"),
@@ -791,10 +532,7 @@ def _source_ready(source: Optional[dict]) -> bool:
         return False
     if source["kind"] == "external_openai":
         return bool((source.get("ref") or "").strip())
-    return any(
-        instance["source_id"] == source["id"] and instance["status"] == "running"
-        for instance in playground_db.list_running_instances()
-    )
+    return False
 
 
 @router.get("/tests")
@@ -1791,7 +1529,6 @@ async def _public_fanout_chat(
                     source_id = source["id"],
                     model_identity = target.model_identity or source["name"],
                     label = label,
-                    instance_id = target.instance_id,
                     content = final.get("content", "".join(content_parts)),
                     reasoning = final.get("reasoning"),
                     latency_ms = final.get("latency_ms"),
