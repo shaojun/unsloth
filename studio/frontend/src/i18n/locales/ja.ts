@@ -1842,6 +1842,7 @@ export const ja = {
       sourceHfCache: "HF キャッシュ",
       sourceLmStudio: "LM Studio",
       sourceOllama: "Ollama",
+      sourceHermes: "Hermes",
       sourceCustomFolder: "カスタムフォルダ",
       sourceLocalModel: "ローカルモデル",
       scanningLocal: "ローカルモデルをスキャン中…",

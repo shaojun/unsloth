@@ -1894,6 +1894,7 @@ export const ru = {
       sourceHfCache: "Кэш HF",
       sourceLmStudio: "LM Studio",
       sourceOllama: "Ollama",
+      sourceHermes: "Hermes",
       sourceCustomFolder: "Пользовательская папка",
       sourceLocalModel: "Локальная модель",
       scanningLocal: "Сканирование локальных моделей…",

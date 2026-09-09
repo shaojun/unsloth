@@ -1951,6 +1951,7 @@ export const de = {
       sourceHfCache: "HF-Cache",
       sourceLmStudio: "LM Studio",
       sourceOllama: "Ollama",
+      sourceHermes: "Hermes",
       sourceCustomFolder: "Benutzerdefinierter Ordner",
       sourceLocalModel: "Lokales Modell",
       vramOomBadge: "OOM",

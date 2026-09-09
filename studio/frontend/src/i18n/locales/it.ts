@@ -1949,6 +1949,7 @@ export const it = {
       sourceHfCache: "Cache HF",
       sourceLmStudio: "LM Studio",
       sourceOllama: "Ollama",
+      sourceHermes: "Hermes",
       sourceCustomFolder: "Cartella personalizzata",
       sourceLocalModel: "Modello locale",
       vramOomBadge: "OOM",
