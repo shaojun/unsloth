@@ -1242,6 +1242,7 @@ export const ja = {
       copy: "コピー",
       copied: "コピーしました",
       commandBuilder: "コマンドビルダー",
+      commandShell: "すべてのコマンドに使用するシェル",
       agent: "コーディングエージェント",
       model: "モデル",
       searchModels: "GGUF モデルを検索...",

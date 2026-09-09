@@ -1260,6 +1260,7 @@ export const ar = {
       copy: "نسخ",
       copied: "تم النسخ",
       commandBuilder: "منشئ الأوامر",
+      commandShell: "الصدفة لجميع الأوامر",
       agent: "وكيل البرمجة",
       model: "النموذج",
       searchModels: "ابحث عن نماذج GGUF...",

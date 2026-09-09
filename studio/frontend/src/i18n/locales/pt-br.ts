@@ -1271,6 +1271,7 @@ export const ptBR = {
       copy: "Copiar",
       copied: "Copiado",
       commandBuilder: "Construtor de comandos",
+      commandShell: "Shell para todos os comandos",
       agent: "Agente de código",
       model: "Modelo",
       searchModels: "Buscar modelos GGUF...",
