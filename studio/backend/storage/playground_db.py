@@ -8,11 +8,10 @@ raw sqlite3, WAL, per-function connections, idempotent additive migrations.
 
 Domain model:
 
-* ``playground_sources``     — model catalog entries (local dir / HF repo /
-  external OpenAI-compatible endpoint). External API keys are NOT stored here:
-  they live in ``storage.credential_secrets`` under the ``playground_api_key``
-  kind; this table only tracks whether one is set.
-* ``playground_instances``   — lifecycle record for each hosted vLLM server.
+* ``playground_sources``     — model catalog entries (external OpenAI-compatible
+  endpoints, typically a manually started ``vllm serve`` instance). External API
+  keys are NOT stored here: they live in ``storage.credential_secrets`` under the
+  ``playground_api_key`` kind; this table only tracks whether one is set.
 * ``playground_tests``       — A/B (or single-model) test configuration.
 * ``playground_sessions``    — one tester's conversation on a test (or a
   single-model play session, or a synthetic judge session).
@@ -73,29 +72,6 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             api_key_set INTEGER NOT NULL DEFAULT 0,
             notes TEXT,
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS playground_instances (
-            id TEXT NOT NULL PRIMARY KEY,
-            source_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            status TEXT NOT NULL,
-            model_slug TEXT NOT NULL,
-            vllm_args_json TEXT NOT NULL DEFAULT '{}',
-            port INTEGER,
-            pid INTEGER,
-            api_key TEXT,
-            merged_dir TEXT,
-            error TEXT,
-            logs_path TEXT,
-            gpu_memory_utilization REAL,
-            created_at TEXT NOT NULL,
-            started_at TEXT,
-            stopped_at TEXT,
             updated_at TEXT NOT NULL
         )
         """
@@ -298,7 +274,7 @@ def reset_schema_cache() -> None:
 # Sources
 # ---------------------------------------------------------------------------
 
-_SOURCE_KINDS = {"local_dir", "hf_model", "external_openai"}
+_SOURCE_KINDS = {"external_openai"}
 
 
 def create_source(
@@ -407,188 +383,6 @@ def list_sources() -> list[dict]:
     try:
         rows = conn.execute("SELECT * FROM playground_sources ORDER BY created_at").fetchall()
         return [dict(row) for row in rows]
-    finally:
-        conn.close()
-
-
-# ---------------------------------------------------------------------------
-# Hosted instances
-# ---------------------------------------------------------------------------
-
-_INSTANCE_STATUSES = {
-    "merging",
-    "loading",
-    "running",
-    "stopping",
-    "stopped",
-    "error",
-}
-
-
-def create_instance(
-    source_id: str,
-    name: str,
-    model_slug: str,
-    vllm_args: Optional[dict] = None,
-    gpu_memory_utilization: Optional[float] = None,
-    instance_id: Optional[str] = None,
-) -> dict:
-    now = _now()
-    instance_id = instance_id or _new_id("pginst")
-    conn = get_connection()
-    try:
-        conn.execute(
-            """
-            INSERT INTO playground_instances (
-                id, source_id, name, status, model_slug, vllm_args_json,
-                gpu_memory_utilization, created_at, updated_at
-            ) VALUES (?, ?, ?, 'loading', ?, ?, ?, ?, ?)
-            """,
-            (
-                instance_id,
-                source_id,
-                name,
-                model_slug,
-                json.dumps(vllm_args or {}),
-                gpu_memory_utilization,
-                now,
-                now,
-            ),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    return get_instance(instance_id) or {"id": instance_id}
-
-
-def update_instance(
-    instance_id: str,
-    status: Optional[str] = None,
-    port: Optional[int] = None,
-    pid: Optional[int] = None,
-    api_key: Optional[str] = None,
-    merged_dir: Optional[str] = None,
-    error: Optional[str] = None,
-    logs_path: Optional[str] = None,
-    started_at: Optional[str] = None,
-    stopped_at: Optional[str] = None,
-    clear: Optional[list[str]] = None,
-) -> Optional[dict]:
-    """Update an instance row. ``clear`` names columns to set to NULL."""
-    if status is not None and status not in _INSTANCE_STATUSES:
-        raise ValueError(f"Unknown instance status: {status}")
-    updates = []
-    params: list = []
-    mapping = {
-        "status": status,
-        "port": port,
-        "pid": pid,
-        "api_key": api_key,
-        "merged_dir": merged_dir,
-        "error": error,
-        "logs_path": logs_path,
-        "started_at": started_at,
-        "stopped_at": stopped_at,
-    }
-    for column, value in mapping.items():
-        if value is not None:
-            updates.append(f"{column} = ?")
-            params.append(value)
-    for column in clear or []:
-        updates.append(f"{column} = NULL")
-    if not updates:
-        return get_instance(instance_id)
-    updates.append("updated_at = ?")
-    params.append(_now())
-    params.append(instance_id)
-    conn = get_connection()
-    try:
-        cursor = conn.execute(
-            f"UPDATE playground_instances SET {', '.join(updates)} WHERE id = ?", params
-        )
-        conn.commit()
-        if cursor.rowcount == 0:
-            return None
-    finally:
-        conn.close()
-    return get_instance(instance_id)
-
-
-def get_instance(instance_id: str) -> Optional[dict]:
-    conn = get_connection()
-    try:
-        row = conn.execute(
-            "SELECT * FROM playground_instances WHERE id = ?", (instance_id,)
-        ).fetchone()
-        data = dict(row) if row else None
-        if data is not None:
-            data.pop("api_key", None)
-            data["vllm_args"] = _load_json(data.pop("vllm_args_json", None), {})
-        return data
-    finally:
-        conn.close()
-
-
-def get_instance_with_key(instance_id: str) -> Optional[dict]:
-    """Internal: fetch including the per-instance random API key."""
-    conn = get_connection()
-    try:
-        row = conn.execute(
-            "SELECT * FROM playground_instances WHERE id = ?", (instance_id,)
-        ).fetchone()
-        if row is None:
-            return None
-        data = dict(row)
-        data["vllm_args"] = _load_json(data.pop("vllm_args_json", None), {})
-        return data
-    finally:
-        conn.close()
-
-
-def list_instances() -> list[dict]:
-    conn = get_connection()
-    try:
-        rows = conn.execute(
-            "SELECT * FROM playground_instances ORDER BY created_at DESC"
-        ).fetchall()
-        out = []
-        for row in rows:
-            data = dict(row)
-            data.pop("api_key", None)
-            data["vllm_args"] = _load_json(data.pop("vllm_args_json", None), {})
-            out.append(data)
-        return out
-    finally:
-        conn.close()
-
-
-def list_running_instances() -> list[dict]:
-    conn = get_connection()
-    try:
-        rows = conn.execute(
-            """
-            SELECT * FROM playground_instances
-            WHERE status IN ('merging', 'loading', 'running')
-            ORDER BY created_at DESC
-            """
-        ).fetchall()
-        out = []
-        for row in rows:
-            data = dict(row)
-            data.pop("api_key", None)
-            data["vllm_args"] = _load_json(data.pop("vllm_args_json", None), {})
-            out.append(data)
-        return out
-    finally:
-        conn.close()
-
-
-def delete_instance(instance_id: str) -> bool:
-    conn = get_connection()
-    try:
-        cursor = conn.execute("DELETE FROM playground_instances WHERE id = ?", (instance_id,))
-        conn.commit()
-        return cursor.rowcount > 0
     finally:
         conn.close()
 

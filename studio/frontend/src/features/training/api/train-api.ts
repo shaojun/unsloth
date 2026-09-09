@@ -101,18 +101,11 @@ class TrainingStartOutcomeUnknownError extends Error {
 
 export class TrainingStartError extends Error {
   readonly errorCode: string | null;
-  /** Structured 409 payload when playground-hosted models are running. */
-  readonly playgroundConflict: { instanceIds: string[]; instanceNames: string[] } | null;
 
-  constructor(
-    message: string,
-    errorCode: string | null = null,
-    playgroundConflict: { instanceIds: string[]; instanceNames: string[] } | null = null,
-  ) {
+  constructor(message: string, errorCode: string | null = null) {
     super(message);
     this.name = "TrainingStartError";
     this.errorCode = errorCode;
-    this.playgroundConflict = playgroundConflict;
   }
 }
 
@@ -138,8 +131,6 @@ async function readTrainingStartError(
       const structured = detail as {
         code?: unknown;
         message?: unknown;
-        conflict_kind?: unknown;
-        instances?: unknown;
       };
       const message =
         typeof structured.message === "string" && structured.message
@@ -148,27 +139,6 @@ async function readTrainingStartError(
       if (message) {
         const code =
           typeof structured.code === "string" ? structured.code : null;
-        const kind =
-          typeof structured.conflict_kind === "string"
-            ? structured.conflict_kind
-            : null;
-        if (kind === "playground_instances_running") {
-          const instances = Array.isArray(structured.instances)
-            ? (structured.instances as { id?: unknown; name?: unknown }[])
-            : [];
-          return new TrainingStartError(
-            message,
-            code,
-            {
-              instanceIds: instances
-                .map((instance) => instance.id)
-                .filter((id): id is string => typeof id === "string"),
-              instanceNames: instances
-                .map((instance) => instance.name)
-                .filter((name): name is string => typeof name === "string"),
-            },
-          );
-        }
         return new TrainingStartError(message, code);
       }
     }

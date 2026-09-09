@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Model Playground backend tests: storage, tokens, vLLM arg validation, and
-route-level security for the public /pg tester pages.
+"""Model Playground backend tests: storage, tokens, and route-level security
+for the public /pg tester pages.
 
 Exercises the route layer with the real routers while stubbing the proxy layer
 (the mock OpenAI server in playground_mock_openai.py covers the proxy itself
@@ -33,7 +33,6 @@ from fastapi.testclient import TestClient
 
 import routes.playground as playground
 import utils.playground_token as playground_token
-from core.inference.vllm_args import VllmArgsError, validate_vllm_args
 from storage import playground_db
 
 _TEST_SECRET = b"unit-test-playground-secret-0123456789abcdef"
@@ -64,7 +63,6 @@ def app_client(isolated_db, monkeypatch):
 
     _rl.reset()
     monkeypatch.setattr(playground, "get_playground_sharing_enabled", lambda: True)
-    monkeypatch.setattr(playground, "get_playground_gpu_budget", lambda: 0.9)
 
     app = FastAPI()
     app.include_router(playground.router, prefix = "/api/playground")
@@ -119,46 +117,6 @@ class TestPlaygroundTokens:
 
 
 # ---------------------------------------------------------------------------
-# vLLM args validation
-# ---------------------------------------------------------------------------
-
-
-class TestVllmArgs:
-    def test_structured_and_extra_args(self):
-        args = validate_vllm_args(
-            {"gpu_memory_utilization": 0.4, "max_model_len": 4096},
-            ["--enable-prefix-caching", "--swap-space", "2"],
-        )
-        argv = args.build_cli_args()
-        assert "--gpu-memory-utilization" in argv
-        assert argv[argv.index("--gpu-memory-utilization") + 1] == "0.4"
-        assert "--enable-prefix-caching" in argv
-
-    def test_denied_flags(self):
-        for denied in ("--port", "--host", "--api-key", "--model", "--served-model-name"):
-            with pytest.raises(VllmArgsError):
-                validate_vllm_args(None, [denied, "1"])
-
-    def test_flag_without_value(self):
-        with pytest.raises(VllmArgsError):
-            validate_vllm_args(None, ["--dtype"])
-
-    def test_dangling_value(self):
-        with pytest.raises(VllmArgsError):
-            validate_vllm_args(None, ["oops"])
-
-    def test_gpu_fraction_range(self):
-        with pytest.raises(VllmArgsError):
-            validate_vllm_args({"gpu_memory_utilization": 0.01})
-        with pytest.raises(VllmArgsError):
-            validate_vllm_args({"gpu_memory_utilization": 1.5})
-
-    def test_equals_form_split(self):
-        args = validate_vllm_args(None, ["--dtype=bfloat16"])
-        assert "--dtype" in args.build_cli_args()
-
-
-# ---------------------------------------------------------------------------
 # Storage
 # ---------------------------------------------------------------------------
 
@@ -172,16 +130,9 @@ class TestPlaygroundStorage:
         assert playground_db.delete_source(source["id"])
         assert playground_db.get_source(source["id"]) is None
 
-    def test_instance_api_key_never_leaked(self):
-        source = _make_source()
-        instance = playground_db.create_instance(
-            source_id = source["id"], name = "n", model_slug = "slug"
-        )
-        playground_db.update_instance(instance["id"], api_key = "secret", status = "running")
-        public = playground_db.get_instance(instance["id"])
-        assert "api_key" not in public
-        internal = playground_db.get_instance_with_key(instance["id"])
-        assert internal["api_key"] == "secret"
+    def test_unknown_source_kind_rejected(self):
+        with pytest.raises(ValueError):
+            playground_db.create_source(kind = "local_dir", name = "S", ref = "/tmp/x")
 
     def test_feedback_roundtrip(self):
         source = _make_source()
@@ -205,11 +156,79 @@ class TestPlaygroundStorage:
         assert len(rows) == 1
         assert rows[0]["tags"] == ["correct"]
 
-    def test_instance_status_validation(self):
-        source = _make_source()
-        instance = playground_db.create_instance(source_id = source["id"], name = "n", model_slug = "s")
-        with pytest.raises(ValueError):
-            playground_db.update_instance(instance["id"], status = "bogus")
+
+# ---------------------------------------------------------------------------
+# Manual vLLM hosting hints
+# ---------------------------------------------------------------------------
+
+
+class TestTrainedModels:
+    def test_completed_runs_with_output_paths(self, app_client, monkeypatch, tmp_path):
+        from storage import studio_db as studio_db_mod
+
+        def fake_list_runs(limit, offset):
+            assert offset == 0
+            return {
+                "runs": [
+                    {
+                        "id": "run_1",
+                        "status": "completed",
+                        "display_name": "My Run",
+                        "model_name": "org/model",
+                        "output_dir": str(tmp_path / "out"),
+                        "ended_at": "2026-01-01T00:00:00+00:00",
+                    },
+                    {
+                        "id": "run_2",
+                        "status": "error",
+                        "display_name": "Bad",
+                        "model_name": "org/model",
+                        "output_dir": str(tmp_path / "bad"),
+                        "ended_at": None,
+                    },
+                ],
+                "total": 2,
+            }
+
+        monkeypatch.setattr(studio_db_mod, "list_runs", fake_list_runs)
+        (tmp_path / "out").mkdir()
+        (tmp_path / "out" / "config.json").write_text("{}", encoding = "utf-8")
+
+        response = app_client.get("/api/playground/trained-models")
+        assert response.status_code == 200
+        models = response.json()["models"]
+        # Only successfully trained (completed) runs are listed.
+        assert [m["run_id"] for m in models] == ["run_1"]
+        assert models[0]["output_dir"] == str(tmp_path / "out")
+        assert models[0]["artifact"] == "model"
+        assert models[0]["name"] == "My Run"
+
+    def test_adapter_dir_annotated(self, app_client, monkeypatch, tmp_path):
+        from storage import studio_db as studio_db_mod
+
+        monkeypatch.setattr(
+            studio_db_mod,
+            "list_runs",
+            lambda limit, offset: {
+                "runs": [
+                    {
+                        "id": "run_1",
+                        "status": "completed",
+                        "display_name": None,
+                        "model_name": "org/model",
+                        "output_dir": str(tmp_path / "adapter"),
+                        "ended_at": None,
+                    }
+                ],
+                "total": 1,
+            },
+        )
+        (tmp_path / "adapter").mkdir()
+        (tmp_path / "adapter" / "adapter_config.json").write_text("{}", encoding = "utf-8")
+
+        models = app_client.get("/api/playground/trained-models").json()["models"]
+        assert models[0]["artifact"] == "adapter"
+        assert models[0]["name"] == "org/model"
 
 
 # ---------------------------------------------------------------------------

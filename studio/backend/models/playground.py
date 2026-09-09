@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 
 class PlaygroundSourceCreate(BaseModel):
-    kind: Literal["local_dir", "hf_model", "external_openai"]
+    kind: Literal["external_openai"] = "external_openai"
     name: str = Field(..., min_length = 1, max_length = 120)
     ref: str = Field(..., min_length = 1, max_length = 2048)
     external_model: Optional[str] = Field(
@@ -33,17 +33,6 @@ class PlaygroundSourceUpdate(BaseModel):
     external_model: Optional[str] = Field(None, max_length = 300)
     api_key: Optional[str] = Field(None, max_length = 4096)
     notes: Optional[str] = Field(None, max_length = 2000)
-
-
-class PlaygroundInstanceCreate(BaseModel):
-    source_id: str = Field(..., min_length = 1, max_length = 64)
-    name: Optional[str] = Field(None, min_length = 1, max_length = 120)
-    vllm_args: Optional[dict[str, Any]] = Field(
-        None, description = "Structured vLLM runtime parameters"
-    )
-    extra_args: Optional[list[str]] = Field(
-        None, max_length = 64, description = "Free-form extra `vllm serve` flags"
-    )
 
 
 class PlaygroundTestSlot(BaseModel):

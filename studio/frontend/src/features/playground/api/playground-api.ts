@@ -3,7 +3,7 @@
 
 import { authFetch } from "@/features/auth";
 
-export type PlaygroundSourceKind = "local_dir" | "hf_model" | "external_openai";
+export type PlaygroundSourceKind = "external_openai";
 
 export interface PlaygroundSource {
   id: string;
@@ -17,20 +17,15 @@ export interface PlaygroundSource {
   updated_at: string;
 }
 
-export interface PlaygroundInstance {
-  id: string;
-  source_id: string;
-  source_name: string | null;
+/** A successfully trained run, for the manual `vllm serve` hosting hints. */
+export interface PlaygroundTrainedModel {
+  run_id: string;
   name: string;
-  status: "merging" | "loading" | "running" | "stopping" | "stopped" | "error";
-  model_slug: string;
-  vllm_args: Record<string, unknown>;
-  gpu_memory_utilization: number | null;
-  merged_dir: string | null;
-  error: string | null;
-  started_at: string | null;
-  stopped_at: string | null;
-  created_at: string;
+  model_name: string | null;
+  output_dir: string;
+  /** "model" = full weights (config.json); "adapter" = LoRA adapter dir; "missing" = unknown. */
+  artifact: "model" | "adapter" | "missing";
+  finished_at: string | null;
 }
 
 export interface PlaygroundTestSlot {
@@ -153,14 +148,6 @@ export interface PlaygroundReport {
   }[];
 }
 
-export interface VllmAvailability {
-  installed: boolean;
-  version: string | null;
-  cli_path: string | null;
-  importable: boolean;
-  reason: string | null;
-}
-
 export const FEEDBACK_TAGS = [
   "correct",
   "instruction-following",
@@ -242,52 +229,10 @@ export const playgroundApi = {
       { method: "POST" },
     ),
 
-  // Instances
-  vllmAvailability: () =>
-    jsonFetch<VllmAvailability>("/api/playground/vllm/availability"),
-  listInstances: () =>
-    jsonFetch<PlaygroundInstance[]>("/api/playground/instances"),
-  hostInstance: (body: Record<string, unknown>) =>
-    jsonFetch<PlaygroundInstance>("/api/playground/instances", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-  stopInstance: (id: string) =>
-    jsonFetch<PlaygroundInstance>(`/api/playground/instances/${id}/stop`, {
-      method: "POST",
-    }),
-  /** Stop every live playground-hosted instance (training contention gate). */
-  stopAllInstances: async (): Promise<number> => {
-    const instances = await jsonFetch<PlaygroundInstance[]>(
-      "/api/playground/instances",
-    );
-    const active = instances.filter(
-      (instance) =>
-        instance.status === "running" ||
-        instance.status === "loading" ||
-        instance.status === "merging",
-    );
-    let stopped = 0;
-    for (const instance of active) {
-      try {
-        await jsonFetch(`/api/playground/instances/${instance.id}/stop`, {
-          method: "POST",
-        });
-        stopped += 1;
-      } catch {
-        /* best-effort: stop as many as possible */
-      }
-    }
-    return stopped;
-  },
-  deleteInstance: (id: string) =>
-    jsonFetch<{ ok: boolean }>(`/api/playground/instances/${id}`, {
-      method: "DELETE",
-    }),
-  instanceLogs: (id: string, tail = 200) =>
-    jsonFetch<{ logs: string }>(
-      `/api/playground/instances/${id}/logs?tail=${tail}`,
+  // Manual hosting hints (successfully trained runs)
+  trainedModels: (limit = 50) =>
+    jsonFetch<{ models: PlaygroundTrainedModel[] }>(
+      `/api/playground/trained-models?limit=${limit}`,
     ),
 
   // Play sessions

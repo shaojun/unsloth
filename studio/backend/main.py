@@ -704,19 +704,6 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         _lifespan_log.warning("chat generation orphan reconciliation failed: %s", exc)
 
-    # Playground: vLLM servers spawned by a previous backend process did not
-    # survive it; reconcile the instance table so the UI shows the truth.
-    try:
-        from core.inference.vllm import get_vllm_backend
-
-        swept = await asyncio.to_thread(get_vllm_backend().sweep_stale_instances)
-        if swept:
-            _lifespan_log.warning(
-                "Marked %d stale playground vLLM instance(s) stopped.", swept
-            )
-    except Exception as exc:  # noqa: BLE001 -- never block startup
-        _lifespan_log.warning("playground instance sweep failed: %s", exc)
-
     try:
         # The boot pass above only settles runs orphaned by the previous process. A run
         # that wedges while this one keeps serving needs the same reconciliation on an
@@ -866,17 +853,6 @@ async def lifespan(app: FastAPI):
     from core.inference.llama_http import aclose as _close_llama_http
 
     await _close_llama_http()
-
-    # Stop every playground-hosted vLLM server so shutdown never leaks GPU
-    # processes.
-    try:
-        from core.inference.vllm import stop_all_instances_async
-
-        stopped = await stop_all_instances_async()
-        if stopped:
-            _lifespan_log.info("Stopped %d playground vLLM instance(s).", stopped)
-    except Exception as exc:  # noqa: BLE001 -- shutdown must be best-effort
-        _lifespan_log.warning("playground instance shutdown failed: %s", exc)
 
     await run_lifespan_shutdown(
         terminate_hub_downloads,
