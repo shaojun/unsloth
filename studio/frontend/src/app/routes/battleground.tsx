@@ -5,15 +5,15 @@ import { createRoute, lazyRouteComponent } from "@tanstack/react-router";
 import { requireAuth } from "../auth-guards";
 import { Route as rootRoute } from "./__root";
 
-const PlaygroundPage = lazyRouteComponent(
-  () => import("@/features/playground"),
-  "PlaygroundPage",
+const BattlegroundPage = lazyRouteComponent(
+  () => import("@/features/battleground"),
+  "BattlegroundPage",
 );
 
 export const Route = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/playground",
-  staticData: { title: "Playground" },
+  path: "/battleground",
+  staticData: { title: "Battleground" },
   beforeLoad: () => requireAuth(),
-  component: PlaygroundPage,
+  component: BattlegroundPage,
 });

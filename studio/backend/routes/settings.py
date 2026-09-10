@@ -3253,6 +3253,9 @@ SIDEBAR_NAV_ITEM_DEFAULTS = {
     "train": True,
     "recipes": False,
     "export": False,
+    # Must mirror SIDEBAR_NAV_ITEM_IDS / SIDEBAR_NAV_DEFAULT_PINNED in
+    # features/settings/stores/appearance-custom-store.ts, order included.
+    "battleground": True,
     "api": False,
 }
 
@@ -3297,6 +3300,7 @@ class PersonalizationSidebarNavItem(BaseModel):
         "train",
         "recipes",
         "export",
+        "battleground",
         "api",
     ]
     pinned: bool = True

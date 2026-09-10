@@ -11,7 +11,7 @@ import { Route as dataRecipesRoute } from "./routes/data-recipes";
 import { Route as dataRecipeRoute } from "./routes/data-recipes.$recipeId";
 import { Route as chatRoute } from "./routes/chat";
 import { Route as exportRoute } from "./routes/export";
-import { Route as playgroundRoute } from "./routes/playground";
+import { Route as battlegroundRoute } from "./routes/battleground";
 import { Route as imagesRoute } from "./routes/images";
 import { Route as videoRoute } from "./routes/video";
 import { Route as audioRoute } from "./routes/audio";
@@ -33,7 +33,7 @@ const routeTree = rootRoute.addChildren([
   chatRoute,
   projectsRoute,
   exportRoute,
-  playgroundRoute,
+  battlegroundRoute,
   imagesRoute,
   videoRoute,
   audioRoute,

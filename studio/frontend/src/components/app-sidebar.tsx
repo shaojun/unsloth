@@ -2132,16 +2132,16 @@ export function AppSidebar() {
       },
     },
     // The monitor page, not the API keys dialog the profile menu opens.
-    playground: {
+    battleground: {
       icon: GamepadDirectionalIcon,
-      label: t("shell.navigation.playground"),
-      active: pathname === "/playground" || pathname.startsWith("/playground/"),
+      label: t("shell.navigation.battleground"),
+      active: pathname === "/battleground" || pathname.startsWith("/battleground/"),
       onClick: () => {
-        navigate({ to: "/playground" });
+        navigate({ to: "/battleground" });
         closeMobileIfOpen();
       },
       onIntent: () => {
-        preloadSilently(router.preloadRoute({ to: "/playground" }));
+        preloadSilently(router.preloadRoute({ to: "/battleground" }));
       },
     },
     api: {

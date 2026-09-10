@@ -1,20 +1,21 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Model Playground API.
+"""Model Battleground API.
 
 Two routers:
 
-* ``router`` — authenticated Studio API under ``/api/playground``. Model
+* ``router`` — authenticated Studio API under ``/api/battleground``. Model
   sources (external OpenAI-compatible endpoints — typically a ``vllm serve``
   instance the user started manually), hosting hint data (successfully trained
   runs and their output paths), play sessions, feedback, A/B tests, prompt
-  sets, LLM-as-judge runs, reports and dataset exports.
-* ``public_router`` — public tester pages under ``/pg`` (short prefix like the
+  sets, standalone LLM-as-judge auto-eval runs, reports and dataset exports.
+* ``public_router`` — public tester pages under ``/bg`` (short prefix like the
   ``/p`` preview pages): a signed-link chat page that fans each message out to
   every model slot with anonymous labels, collects per-response ratings and a
-  pick-best vote per turn, and reveals identities only after the vote (blind
-  testing). Model identity never leaves the server for unrevealed turns.
+  pick-best vote per turn, and reveals identities only once the tester
+  explicitly finishes the conversation (every turn voted — blind testing).
+  Model identity never leaves the server for unrevealed turns.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ import io
 import json
 import math
 import random
+import zipfile
 from pathlib import Path
 from typing import AsyncIterator, Optional
 
@@ -34,26 +36,29 @@ from loggers import get_logger
 from pydantic import BaseModel
 
 from auth.authentication import get_current_subject
-from core.playground import judge as playground_judge
-from core.playground.proxy import (
-    PlaygroundProxyError,
+from core.battleground import judge as battleground_judge
+from core.battleground.proxy import (
+    BATTLEGROUND_API_KEY_KIND,
+    BattlegroundProxyError,
     resolve_source_target,
     stream_chat_completion,
     test_source_connection,
 )
-from models.playground import (
-    PlaygroundChatRequest,
-    PlaygroundFeedbackRequest,
-    PlaygroundJudgeRunCreate,
-    PlaygroundPlaySessionCreate,
-    PlaygroundPromptAdd,
-    PlaygroundPromptSetCreate,
-    PlaygroundSourceCreate,
-    PlaygroundSourceUpdate,
-    PlaygroundTestCreate,
-    PlaygroundTestUpdate,
+from models.battleground import (
+    BattlegroundChatRequest,
+    BattlegroundFeedbackRequest,
+    BattlegroundJudgeRunCreate,
+    BattlegroundPlaySessionCreate,
+    BattlegroundPromptAdd,
+    BattlegroundPromptSetCreate,
+    BattlegroundPromptSetUpdate,
+    BattlegroundPromptUpdate,
+    BattlegroundSourceCreate,
+    BattlegroundSourceUpdate,
+    BattlegroundTestCreate,
+    BattlegroundTestUpdate,
 )
-from storage import playground_db
+from storage import battleground_db
 from storage.credential_secrets import (
     delete_secret,
     get_secret,
@@ -61,11 +66,11 @@ from storage.credential_secrets import (
 )
 from utils.client_ip import client_ip
 from utils.paths import resolve_output_dir
-from utils.playground_settings import (
-    get_playground_sharing_enabled,
-    set_playground_sharing_enabled,
+from utils.battleground_settings import (
+    get_battleground_sharing_enabled,
+    set_battleground_sharing_enabled,
 )
-from utils.playground_token import sign_playground_ref, verify_playground_ref
+from utils.battleground_token import sign_battleground_ref, verify_battleground_ref
 from utils.preview_rate_limit import check_rate_limit
 
 logger = get_logger(__name__)
@@ -116,23 +121,23 @@ def _sse(payload: dict) -> str:
 
 
 @router.get("/settings")
-def get_playground_settings(current_subject: str = Depends(get_current_subject)):
+def get_battleground_settings(current_subject: str = Depends(get_current_subject)):
     return {
-        "public_sharing_enabled": get_playground_sharing_enabled(),
+        "public_sharing_enabled": get_battleground_sharing_enabled(),
     }
 
 
-class PlaygroundSettingsUpdate(BaseModel):
+class BattlegroundSettingsUpdate(BaseModel):
     public_sharing_enabled: Optional[bool] = None
 
 
 @router.put("/settings")
-def update_playground_settings(
-    payload: PlaygroundSettingsUpdate, current_subject: str = Depends(get_current_subject)
+def update_battleground_settings(
+    payload: BattlegroundSettingsUpdate, current_subject: str = Depends(get_current_subject)
 ):
     result = {}
     if payload.public_sharing_enabled is not None:
-        result["public_sharing_enabled"] = set_playground_sharing_enabled(
+        result["public_sharing_enabled"] = set_battleground_sharing_enabled(
             payload.public_sharing_enabled
         )
     return result
@@ -159,14 +164,14 @@ def _serialize_source(source: dict) -> dict:
 
 @router.get("/sources")
 def list_sources(current_subject: str = Depends(get_current_subject)):
-    return [_serialize_source(s) for s in playground_db.list_sources()]
+    return [_serialize_source(s) for s in battleground_db.list_sources()]
 
 
 @router.post("/sources")
 def create_source(
-    payload: PlaygroundSourceCreate, current_subject: str = Depends(get_current_subject)
+    payload: BattlegroundSourceCreate, current_subject: str = Depends(get_current_subject)
 ):
-    source = playground_db.create_source(
+    source = battleground_db.create_source(
         kind = payload.kind,
         name = payload.name.strip(),
         ref = payload.ref.strip(),
@@ -175,22 +180,22 @@ def create_source(
         notes = payload.notes,
     )
     if payload.api_key:
-        upsert_secret("playground_api_key", source["id"], payload.api_key)
-        playground_db.update_source(source["id"], api_key_set = True)
-        source = playground_db.get_source(source["id"]) or source
+        upsert_secret(BATTLEGROUND_API_KEY_KIND, source["id"], payload.api_key)
+        battleground_db.update_source(source["id"], api_key_set = True)
+        source = battleground_db.get_source(source["id"]) or source
     return _serialize_source(source)
 
 
 @router.put("/sources/{source_id}")
 def update_source(
     source_id: str,
-    payload: PlaygroundSourceUpdate,
+    payload: BattlegroundSourceUpdate,
     current_subject: str = Depends(get_current_subject),
 ):
-    existing = playground_db.get_source(source_id)
+    existing = battleground_db.get_source(source_id)
     if existing is None:
         raise HTTPException(status_code = 404, detail = "Source not found")
-    updated = playground_db.update_source(
+    updated = battleground_db.update_source(
         source_id,
         name = payload.name,
         ref = payload.ref.strip() if payload.ref is not None else None,
@@ -198,22 +203,22 @@ def update_source(
         notes = payload.notes,
     )
     if payload.api_key:
-        upsert_secret("playground_api_key", source_id, payload.api_key)
-        playground_db.update_source(source_id, api_key_set = True)
+        upsert_secret(BATTLEGROUND_API_KEY_KIND, source_id, payload.api_key)
+        battleground_db.update_source(source_id, api_key_set = True)
     return _serialize_source(updated or existing)
 
 
 @router.delete("/sources/{source_id}")
 def delete_source(source_id: str, current_subject: str = Depends(get_current_subject)):
-    if not playground_db.delete_source(source_id):
+    if not battleground_db.delete_source(source_id):
         raise HTTPException(status_code = 404, detail = "Source not found")
-    delete_secret("playground_api_key", source_id)
+    delete_secret(BATTLEGROUND_API_KEY_KIND, source_id)
     return {"ok": True}
 
 
 @router.post("/sources/{source_id}/test")
 async def test_source(source_id: str, current_subject: str = Depends(get_current_subject)):
-    source = playground_db.get_source(source_id)
+    source = battleground_db.get_source(source_id)
     if source is None:
         raise HTTPException(status_code = 404, detail = "Source not found")
     return await test_source_connection(source)
@@ -245,7 +250,7 @@ def trained_models(
 
     Feeds the Models-tab hosting hints: the app does not start inference
     servers itself — users copy a ``vllm serve <output_path>`` command into a
-    terminal, then register the resulting endpoint as a playground source.
+    terminal, then register the resulting endpoint as a battleground source.
     """
     from storage.studio_db import list_runs
 
@@ -282,12 +287,12 @@ def trained_models(
 
 @router.post("/play/sessions")
 def create_play_session(
-    payload: PlaygroundPlaySessionCreate, current_subject: str = Depends(get_current_subject)
+    payload: BattlegroundPlaySessionCreate, current_subject: str = Depends(get_current_subject)
 ):
-    source = playground_db.get_source(payload.source_id)
+    source = battleground_db.get_source(payload.source_id)
     if source is None:
         raise HTTPException(status_code = 404, detail = "Source not found")
-    session = playground_db.create_session(mode = "play", source_id = source["id"])
+    session = battleground_db.create_session(mode = "play", source_id = source["id"])
     return {
         "session_id": session["id"],
         "source": _serialize_source(source),
@@ -297,16 +302,16 @@ def create_play_session(
 
 @router.get("/play/sessions/{session_id}")
 def get_play_session(session_id: str, current_subject: str = Depends(get_current_subject)):
-    session = playground_db.get_session(session_id)
+    session = battleground_db.get_session(session_id)
     if session is None or session["mode"] != "play":
         raise HTTPException(status_code = 404, detail = "Session not found")
-    source = playground_db.get_source(session["source_id"])
-    turns = playground_db.list_turns(session_id)
-    responses = playground_db.list_responses_for_session(session_id)
+    source = battleground_db.get_source(session["source_id"])
+    turns = battleground_db.list_turns(session_id)
+    responses = battleground_db.list_responses_for_session(session_id)
     responses_by_turn: dict[str, list[dict]] = {}
     for response in responses:
         responses_by_turn.setdefault(response["turn_id"], []).append(response)
-    feedback = playground_db.list_feedback(session_id = session_id)
+    feedback = battleground_db.list_feedback(session_id = session_id)
     feedback_by_response = {f["response_id"]: f for f in feedback if f["response_id"]}
     out_turns = []
     for turn in turns:
@@ -335,13 +340,13 @@ def get_play_session(session_id: str, current_subject: str = Depends(get_current
 @router.post("/play/sessions/{session_id}/chat")
 async def play_session_chat(
     session_id: str,
-    payload: PlaygroundChatRequest,
+    payload: BattlegroundChatRequest,
     current_subject: str = Depends(get_current_subject),
 ):
-    session = playground_db.get_session(session_id)
+    session = battleground_db.get_session(session_id)
     if session is None or session["mode"] != "play":
         raise HTTPException(status_code = 404, detail = "Session not found")
-    source = playground_db.get_source(session["source_id"])
+    source = battleground_db.get_source(session["source_id"])
     if source is None:
         raise HTTPException(status_code = 404, detail = "Source was deleted")
 
@@ -351,14 +356,14 @@ async def play_session_chat(
         value = getattr(payload, key, None)
         if value is not None:
             params[key] = value
-    turn = playground_db.create_turn(session_id, messages[-1]["content"], params)
+    turn = battleground_db.create_turn(session_id, messages[-1]["content"], params)
 
     async def event_gen() -> AsyncIterator[str]:
         yield _sse({"type": "turn", "turn_id": turn["id"]})
         try:
             target = resolve_source_target(source)
-        except PlaygroundProxyError as exc:
-            response = playground_db.create_response(
+        except BattlegroundProxyError as exc:
+            response = battleground_db.create_response(
                 turn_id = turn["id"],
                 session_id = session_id,
                 source_id = source["id"],
@@ -380,7 +385,7 @@ async def play_session_chat(
                     yield _sse(event)
                 else:
                     final = event
-            response = playground_db.create_response(
+            response = battleground_db.create_response(
                 turn_id = turn["id"],
                 session_id = session_id,
                 source_id = source["id"],
@@ -401,8 +406,8 @@ async def play_session_chat(
                     "completion_tokens": final.get("completion_tokens"),
                 }
             )
-        except PlaygroundProxyError as exc:
-            response = playground_db.create_response(
+        except BattlegroundProxyError as exc:
+            response = battleground_db.create_response(
                 turn_id = turn["id"],
                 session_id = session_id,
                 source_id = source["id"],
@@ -429,17 +434,17 @@ async def play_session_chat(
 
 @router.post("/feedback")
 def create_feedback(
-    payload: PlaygroundFeedbackRequest, current_subject: str = Depends(get_current_subject)
+    payload: BattlegroundFeedbackRequest, current_subject: str = Depends(get_current_subject)
 ):
     return _store_feedback(payload)
 
 
-def _store_feedback(payload: PlaygroundFeedbackRequest, *, public: bool = False) -> dict:
-    session = playground_db.get_session(payload.session_id)
+def _store_feedback(payload: BattlegroundFeedbackRequest, *, public: bool = False) -> dict:
+    session = battleground_db.get_session(payload.session_id)
     if session is None:
         raise HTTPException(status_code = 404, detail = "Session not found")
     if payload.response_id is not None:
-        response = playground_db.get_response(payload.response_id)
+        response = battleground_db.get_response(payload.response_id)
         if response is None or response["session_id"] != payload.session_id:
             raise HTTPException(status_code = 400, detail = "Response does not belong to session")
     if payload.kind == "rating":
@@ -453,13 +458,13 @@ def _store_feedback(payload: PlaygroundFeedbackRequest, *, public: bool = False)
                 status_code = 400,
                 detail = "pick_best feedback needs turn_id and chosen_response_id",
             )
-        chosen = playground_db.get_response(payload.chosen_response_id)
+        chosen = battleground_db.get_response(payload.chosen_response_id)
         if chosen is None or chosen["turn_id"] != payload.turn_id:
             raise HTTPException(
                 status_code = 400, detail = "chosen_response_id does not belong to turn"
             )
     tags = [t for t in (payload.tags or []) if t in FEEDBACK_TAGS]
-    row = playground_db.create_feedback(
+    row = battleground_db.create_feedback(
         session_id = payload.session_id,
         kind = payload.kind,
         turn_id = payload.turn_id,
@@ -470,21 +475,13 @@ def _store_feedback(payload: PlaygroundFeedbackRequest, *, public: bool = False)
         chosen_response_id = payload.chosen_response_id,
     )
     result: dict = {"ok": True, "feedback_id": row["id"]}
-
-    # Reveal-after-vote: a pick_best vote on a turn reveals identities.
-    if payload.kind == "pick_best" and payload.turn_id:
-        turn = playground_db.get_turn(payload.turn_id)
-        test = playground_db.get_test(session["test_id"]) if session.get("test_id") else None
-        if test and test.get("reveal_after_vote") and turn and not turn["revealed"]:
-            playground_db.mark_turn_revealed(payload.turn_id)
-            result["revealed"] = _revealed_map(session, payload.turn_id)
     return result
 
 
 def _revealed_map(session: dict, turn_id: str) -> dict[str, str]:
     """{label: model identity} for one revealed turn."""
     out: dict[str, str] = {}
-    for response in playground_db.list_responses_for_turn(turn_id):
+    for response in battleground_db.list_responses_for_turn(turn_id):
         if response["label"]:
             out[response["label"]] = response["model_identity"]
     return out
@@ -496,7 +493,7 @@ def _revealed_map(session: dict, turn_id: str) -> dict[str, str]:
 
 
 def _serialize_test(test: dict, include_share: bool = True) -> dict:
-    sources = {s["id"]: s for s in playground_db.list_sources()}
+    sources = {s["id"]: s for s in battleground_db.list_sources()}
     slots = []
     for slot in test["slots"]:
         source = sources.get(slot["source_id"])
@@ -521,8 +518,8 @@ def _serialize_test(test: dict, include_share: bool = True) -> dict:
         "updated_at": test["updated_at"],
     }
     if include_share:
-        token = sign_playground_ref(f"t/{test['id']}")
-        data["share_url"] = f"/pg/t/{test['id']}?k={token}"
+        token = sign_battleground_ref(f"t/{test['id']}")
+        data["share_url"] = f"/bg/t/{test['id']}?k={token}"
     return data
 
 
@@ -539,21 +536,21 @@ def _source_ready(source: Optional[dict]) -> bool:
 def list_tests(
     include_archived: bool = Query(False), current_subject: str = Depends(get_current_subject)
 ):
-    return [_serialize_test(test) for test in playground_db.list_tests(include_archived)]
+    return [_serialize_test(test) for test in battleground_db.list_tests(include_archived)]
 
 
 @router.post("/tests")
-def create_test(payload: PlaygroundTestCreate, current_subject: str = Depends(get_current_subject)):
+def create_test(payload: BattlegroundTestCreate, current_subject: str = Depends(get_current_subject)):
     source_ids = []
     for slot in payload.slots:
-        source = playground_db.get_source(slot.source_id)
+        source = battleground_db.get_source(slot.source_id)
         if source is None:
             raise HTTPException(status_code = 404, detail = f"Source {slot.source_id} not found")
         if slot.source_id not in source_ids:
             source_ids.append(slot.source_id)
     if not source_ids:
         raise HTTPException(status_code = 400, detail = "A test needs at least one model")
-    test = playground_db.create_test(
+    test = battleground_db.create_test(
         name = payload.name.strip(),
         slots = [{"source_id": sid} for sid in source_ids],
         show_model_cards = payload.show_model_cards,
@@ -567,23 +564,23 @@ def create_test(payload: PlaygroundTestCreate, current_subject: str = Depends(ge
 @router.put("/tests/{test_id}")
 def update_test(
     test_id: str,
-    payload: PlaygroundTestUpdate,
+    payload: BattlegroundTestUpdate,
     current_subject: str = Depends(get_current_subject),
 ):
-    existing = playground_db.get_test(test_id)
+    existing = battleground_db.get_test(test_id)
     if existing is None:
         raise HTTPException(status_code = 404, detail = "Test not found")
     slots = None
     if payload.slots is not None:
         seen: list[str] = []
         for slot in payload.slots:
-            source = playground_db.get_source(slot.source_id)
+            source = battleground_db.get_source(slot.source_id)
             if source is None:
                 raise HTTPException(status_code = 404, detail = f"Source {slot.source_id} not found")
             if slot.source_id not in seen:
                 seen.append(slot.source_id)
         slots = [{"source_id": sid} for sid in seen]
-    updated = playground_db.update_test(
+    updated = battleground_db.update_test(
         test_id,
         name = payload.name,
         status = payload.status,
@@ -598,7 +595,7 @@ def update_test(
 
 @router.delete("/tests/{test_id}")
 def delete_test(test_id: str, current_subject: str = Depends(get_current_subject)):
-    if not playground_db.delete_test(test_id):
+    if not battleground_db.delete_test(test_id):
         raise HTTPException(status_code = 404, detail = "Test not found")
     return {"ok": True}
 
@@ -677,62 +674,105 @@ _BUILTIN_PROMPT_SETS = [
 
 def ensure_builtin_prompt_sets() -> None:
     for spec in _BUILTIN_PROMPT_SETS:
-        if playground_db.get_prompt_set(spec["id"]) is None:
-            playground_db.create_prompt_set(
+        if battleground_db.get_prompt_set(spec["id"]) is None:
+            battleground_db.create_prompt_set(
                 name = spec["name"],
                 description = spec["description"],
                 origin = "builtin",
                 set_id = spec["id"],
             )
-            playground_db.add_prompts_bulk(spec["id"], spec["prompts"])
+            battleground_db.add_prompts_bulk(spec["id"], spec["prompts"])
 
 
 @router.get("/prompt-sets")
 def list_prompt_sets(current_subject: str = Depends(get_current_subject)):
     ensure_builtin_prompt_sets()
-    return playground_db.list_prompt_sets()
+    return battleground_db.list_prompt_sets()
 
 
 @router.post("/prompt-sets")
 def create_prompt_set(
-    payload: PlaygroundPromptSetCreate, current_subject: str = Depends(get_current_subject)
+    payload: BattlegroundPromptSetCreate, current_subject: str = Depends(get_current_subject)
 ):
-    prompt_set = playground_db.create_prompt_set(
+    prompt_set = battleground_db.create_prompt_set(
         name = payload.name.strip(), description = payload.description
     )
     if payload.prompts:
-        playground_db.add_prompts_bulk(prompt_set["id"], payload.prompts)
-    return playground_db.get_prompt_set(prompt_set["id"])
+        battleground_db.add_prompts_bulk(prompt_set["id"], payload.prompts)
+    return battleground_db.get_prompt_set(prompt_set["id"])
+
+
+@router.put("/prompt-sets/{set_id}")
+def update_prompt_set(
+    set_id: str,
+    payload: BattlegroundPromptSetUpdate,
+    current_subject: str = Depends(get_current_subject),
+):
+    existing = battleground_db.get_prompt_set(set_id)
+    if existing is None:
+        raise HTTPException(status_code = 404, detail = "Prompt set not found")
+    fields_set = payload.model_fields_set
+    updated = battleground_db.update_prompt_set(
+        set_id,
+        name = payload.name.strip() if payload.name is not None else None,
+        description = payload.description if "description" in fields_set else battleground_db._UNSET,
+    )
+    return updated or existing
 
 
 @router.delete("/prompt-sets/{set_id}")
 def delete_prompt_set(set_id: str, current_subject: str = Depends(get_current_subject)):
-    if not playground_db.delete_prompt_set(set_id):
+    if not battleground_db.delete_prompt_set(set_id):
         raise HTTPException(status_code = 404, detail = "Prompt set not found")
     return {"ok": True}
 
 
 @router.get("/prompt-sets/{set_id}/prompts")
 def list_prompts(set_id: str, current_subject: str = Depends(get_current_subject)):
-    if playground_db.get_prompt_set(set_id) is None:
+    if battleground_db.get_prompt_set(set_id) is None:
         raise HTTPException(status_code = 404, detail = "Prompt set not found")
-    return playground_db.list_prompts(set_id)
+    return battleground_db.list_prompts(set_id)
 
 
 @router.post("/prompt-sets/{set_id}/prompts")
 def add_prompt(
     set_id: str,
-    payload: PlaygroundPromptAdd,
+    payload: BattlegroundPromptAdd,
     current_subject: str = Depends(get_current_subject),
 ):
-    if playground_db.get_prompt_set(set_id) is None:
+    if battleground_db.get_prompt_set(set_id) is None:
         raise HTTPException(status_code = 404, detail = "Prompt set not found")
-    return playground_db.add_prompt(
+    return battleground_db.add_prompt(
         set_id,
         prompt = payload.prompt,
         reference_answer = payload.reference_answer,
         tags = payload.tags,
     )
+
+
+@router.put("/prompt-sets/{set_id}/prompts/{prompt_id}")
+def update_prompt(
+    set_id: str,
+    prompt_id: str,
+    payload: BattlegroundPromptUpdate,
+    current_subject: str = Depends(get_current_subject),
+):
+    if battleground_db.get_prompt_set(set_id) is None:
+        raise HTTPException(status_code = 404, detail = "Prompt set not found")
+    existing = battleground_db.get_prompt(prompt_id)
+    if existing is None or existing["set_id"] != set_id:
+        raise HTTPException(status_code = 404, detail = "Prompt not found")
+    fields_set = payload.model_fields_set
+    updated = battleground_db.update_prompt(
+        prompt_id,
+        prompt = payload.prompt if payload.prompt is not None else None,
+        reference_answer = (
+            payload.reference_answer
+            if "reference_answer" in fields_set
+            else battleground_db._UNSET
+        ),
+    )
+    return updated or existing
 
 
 @router.delete("/prompt-sets/{set_id}/prompts/{prompt_id}")
@@ -741,7 +781,7 @@ def delete_prompt(
     prompt_id: str,
     current_subject: str = Depends(get_current_subject),
 ):
-    if not playground_db.delete_prompt(prompt_id):
+    if not battleground_db.delete_prompt(prompt_id):
         raise HTTPException(status_code = 404, detail = "Prompt not found")
     return {"ok": True}
 
@@ -753,71 +793,101 @@ def delete_prompt(
 
 @router.post("/judge/runs")
 async def create_judge_run(
-    payload: PlaygroundJudgeRunCreate, current_subject: str = Depends(get_current_subject)
+    payload: BattlegroundJudgeRunCreate, current_subject: str = Depends(get_current_subject)
 ):
-    test = playground_db.get_test(payload.test_id)
-    if test is None:
-        raise HTTPException(status_code = 404, detail = "Test not found")
-    if playground_db.get_prompt_set(payload.prompt_set_id) is None:
+    # Standalone auto-eval: participants are picked directly, not via an A/B test.
+    source_ids: list[str] = []
+    for source_id in payload.source_ids:
+        if battleground_db.get_source(source_id) is None:
+            raise HTTPException(status_code = 404, detail = f"Source {source_id} not found")
+        if source_id not in source_ids:
+            source_ids.append(source_id)
+    if payload.mode == "pairwise" and len(source_ids) != 2:
+        raise HTTPException(
+            status_code = 400,
+            detail = "Pairwise mode needs exactly two participant models",
+        )
+    if not source_ids:
+        raise HTTPException(status_code = 400, detail = "An auto eval needs at least one model")
+    if battleground_db.get_prompt_set(payload.prompt_set_id) is None:
         raise HTTPException(status_code = 404, detail = "Prompt set not found")
-    judge_source = playground_db.get_source(payload.judge_source_id)
+    judge_source = battleground_db.get_source(payload.judge_source_id)
     if judge_source is None:
         raise HTTPException(status_code = 404, detail = "Judge source not found")
-    slot_ids = {slot["source_id"] for slot in test["slots"]}
-    if payload.judge_source_id in slot_ids:
+    if payload.judge_source_id in source_ids:
         raise HTTPException(
             status_code = 400,
             detail = (
-                "The judge source is one of the models under test. Pick a "
+                "The judge source is one of the participant models. Pick a "
                 "different judge to avoid self-preference bias."
             ),
         )
-    run = playground_db.create_judge_run(
-        test_id = payload.test_id,
+    run = battleground_db.create_judge_run(
         prompt_set_id = payload.prompt_set_id,
         judge_source_id = payload.judge_source_id,
         mode = payload.mode,
-        config = {"max_prompts": payload.max_prompts},
+        config = {
+            "max_prompts": payload.max_prompts,
+            "source_ids": source_ids,
+        },
     )
-    _spawn_background(playground_judge.run_judge_run(run["id"]))
-    return playground_db.get_judge_run(run["id"])
+    _spawn_background(battleground_judge.run_judge_run(run["id"]))
+    return battleground_db.get_judge_run(run["id"])
+
+
+def _serialize_judge_run_summary(
+    run: dict,
+    sources: dict[str, dict],
+    tests: dict[str, dict],
+) -> dict:
+    """Add display names: participants come from config.source_ids for
+    standalone runs, falling back to the legacy test's slots."""
+    config = run.get("config") or {}
+    source_ids = list(config.get("source_ids") or [])
+    if not source_ids and run.get("test_id"):
+        test = tests.get(run["test_id"])
+        source_ids = [slot["source_id"] for slot in ((test or {}).get("slots") or [])]
+    return {
+        **run,
+        "judge_source_name": (sources.get(run["judge_source_id"]) or {}).get("name"),
+        "test_name": (tests.get(run["test_id"]) or {}).get("name"),
+        "source_ids": source_ids,
+        "source_names": [
+            (sources.get(sid) or {}).get("name") or "(deleted source)"
+            for sid in source_ids
+        ],
+    }
 
 
 @router.get("/judge/runs")
 def list_judge_runs(
     test_id: Optional[str] = None, current_subject: str = Depends(get_current_subject)
 ):
-    runs = playground_db.list_judge_runs(test_id)
-    sources = {s["id"]: s for s in playground_db.list_sources()}
-    tests = {t["id"]: t for t in playground_db.list_tests(include_archived = True)}
-    out = []
-    for run in runs:
-        out.append(
-            {
-                **run,
-                "judge_source_name": (sources.get(run["judge_source_id"]) or {}).get("name"),
-                "test_name": (tests.get(run["test_id"]) or {}).get("name"),
-            }
-        )
-    return out
+    runs = battleground_db.list_judge_runs(test_id)
+    sources = {s["id"]: s for s in battleground_db.list_sources()}
+    tests = {t["id"]: t for t in battleground_db.list_tests(include_archived = True)}
+    return [_serialize_judge_run_summary(run, sources, tests) for run in runs]
 
 
 @router.get("/judge/runs/{run_id}")
 def get_judge_run(run_id: str, current_subject: str = Depends(get_current_subject)):
-    run = playground_db.get_judge_run(run_id)
+    run = battleground_db.get_judge_run(run_id)
     if run is None:
         raise HTTPException(status_code = 404, detail = "Judge run not found")
-    return {**run, "results": playground_db.list_judge_results(run_id)}
+    sources = {s["id"]: s for s in battleground_db.list_sources()}
+    tests = {t["id"]: t for t in battleground_db.list_tests(include_archived = True)}
+    summary = _serialize_judge_run_summary(run, sources, tests)
+    return {**summary, "results": battleground_db.list_judge_results(run_id)}
 
 
 @router.post("/judge/runs/{run_id}/cancel")
 def cancel_judge_run(run_id: str, current_subject: str = Depends(get_current_subject)):
-    run = playground_db.get_judge_run(run_id)
+    run = battleground_db.get_judge_run(run_id)
     if run is None:
         raise HTTPException(status_code = 404, detail = "Judge run not found")
     if run["status"] not in {"queued", "running"}:
         raise HTTPException(status_code = 409, detail = "Run is not running")
-    playground_judge.request_cancel(run_id)
+    battleground_judge.request_cancel(run_id)
     return {"ok": True}
 
 
@@ -850,13 +920,13 @@ def _percentile(values: list[float], pct: float) -> Optional[float]:
 
 def _collect_report_data(test_id: Optional[str]) -> dict:
     if test_id:
-        tests = [playground_db.get_test(test_id)]
+        tests = [battleground_db.get_test(test_id)]
         tests = [t for t in tests if t is not None]
     else:
-        tests = playground_db.list_tests(include_archived = True)
+        tests = battleground_db.list_tests(include_archived = True)
     test_ids = [t["id"] for t in tests]
 
-    sources = {s["id"]: _serialize_source(s) for s in playground_db.list_sources()}
+    sources = {s["id"]: _serialize_source(s) for s in battleground_db.list_sources()}
     stats: dict[str, dict] = {
         sid: {
             "source": source,
@@ -887,11 +957,11 @@ def _collect_report_data(test_id: Optional[str]) -> dict:
             }
 
     # ---- Human feedback ----
-    for feedback in playground_db.list_feedback_for_tests(test_ids):
+    for feedback in battleground_db.list_feedback_for_tests(test_ids):
         if feedback["kind"] not in {"rating", "pick_best"}:
             continue
         if feedback["kind"] == "rating" and feedback["response_id"]:
-            response = playground_db.get_response(feedback["response_id"])
+            response = battleground_db.get_response(feedback["response_id"])
             if response is None:
                 continue
             _ensure(response["source_id"])
@@ -904,7 +974,7 @@ def _collect_report_data(test_id: Optional[str]) -> dict:
                 entry["tags"][tag] = entry["tags"].get(tag, 0) + 1
         elif feedback["kind"] == "pick_best" and feedback["turn_id"]:
             responses = {
-                r["id"]: r for r in playground_db.list_responses_for_turn(feedback["turn_id"])
+                r["id"]: r for r in battleground_db.list_responses_for_turn(feedback["turn_id"])
             }
             chosen = responses.get(feedback["chosen_response_id"] or "")
             if chosen is None:
@@ -918,12 +988,17 @@ def _collect_report_data(test_id: Optional[str]) -> dict:
                     stats[response["source_id"]]["human"]["losses"] += 1
 
     # ---- Judge results ----
+    # Standalone auto-eval runs are not tied to tests anymore: aggregate every
+    # completed run regardless of test scope (the judge section of the UI
+    # always shows the global picture).
     pairwise_matrix: dict[str, dict] = {}
-    for test in tests:
-        for run in playground_db.list_judge_runs(test_id = test["id"], limit = 500):
-            if run["status"] != "done":
-                continue
-            for result in playground_db.list_judge_results(run["id"]):
+    judge_run_sessions: set[str] = set()
+    for run in battleground_db.list_judge_runs(limit = 500):
+        if run.get("session_id"):
+            judge_run_sessions.add(run["session_id"])
+        if run["status"] != "done":
+            continue
+        for result in battleground_db.list_judge_results(run["id"]):
                 a, b = result["source_a"], result["source_b"]
                 # Rubric rows score one response: no winner, no b side.
                 if b is None or result["winner"] is None:
@@ -965,10 +1040,10 @@ def _collect_report_data(test_id: Optional[str]) -> dict:
                     matrix_entry["judge"][2] += 1
 
     # Human pick-best into the matrix too.
-    for feedback in playground_db.list_feedback_for_tests(test_ids):
+    for feedback in battleground_db.list_feedback_for_tests(test_ids):
         if feedback["kind"] != "pick_best" or not feedback["turn_id"]:
             continue
-        responses = list(playground_db.list_responses_for_turn(feedback["turn_id"]))
+        responses = list(battleground_db.list_responses_for_turn(feedback["turn_id"]))
         if len(responses) < 2:
             continue
         chosen_id = feedback["chosen_response_id"]
@@ -985,11 +1060,13 @@ def _collect_report_data(test_id: Optional[str]) -> dict:
                     matrix_entry["human"][idx] += 1
 
     # ---- Response volume / latency ----
+    # Test sessions (public testers + legacy judge sessions) plus the synthetic
+    # sessions of every standalone judge run.
     session_ids = {
-        s["id"] for t in tests for s in (playground_db.list_sessions_for_test(t["id"]) if t else [])
-    }
+        s["id"] for t in tests for s in (battleground_db.list_sessions_for_test(t["id"]) if t else [])
+    } | judge_run_sessions
     for session_id in session_ids:
-        for response in playground_db.list_responses_for_session(session_id):
+        for response in battleground_db.list_responses_for_session(session_id):
             _ensure(response["source_id"])
             entry = stats[response["source_id"]]
             entry["responses"] += 1
@@ -1004,8 +1081,9 @@ def _collect_report_data(test_id: Optional[str]) -> dict:
     for source_id, entry in stats.items():
         human = entry["human"]
         judge = entry["judge"]
-        # Skip sources that are neither under test in scope nor have any data
-        # (e.g. a judge source, or a source never used by these tests).
+        rubric_count = entry["rubric_count"]
+        # Skip sources that are neither in scope nor have any data (e.g. a
+        # judge source, or a source never used by these tests or judge runs).
         if source_id not in slot_source_ids and not (
             human["wins"]
             or human["losses"]
@@ -1013,6 +1091,7 @@ def _collect_report_data(test_id: Optional[str]) -> dict:
             or human["bad"]
             or judge["wins"]
             or judge["losses"]
+            or rubric_count
             or entry["responses"]
         ):
             continue
@@ -1098,7 +1177,7 @@ def report_overview(
 ):
     data = _collect_report_data(test_id)
     tests = data.pop("tests")
-    sessions = sum(len(playground_db.list_sessions_for_test(t["id"])) for t in tests)
+    sessions = sum(len(battleground_db.list_sessions_for_test(t["id"])) for t in tests)
     return {
         "scope": {"test_id": test_id, "test_count": len(tests), "sessions": sessions},
         **data,
@@ -1108,13 +1187,13 @@ def report_overview(
 def _iter_dpo_pairs(test_ids: list[str]):
     """Yield (prompt, chosen_text, rejected_text, source_kind, meta) tuples."""
     # Human pick-best votes.
-    for feedback in playground_db.list_feedback_for_tests(test_ids):
+    for feedback in battleground_db.list_feedback_for_tests(test_ids):
         if feedback["kind"] != "pick_best" or not feedback["turn_id"]:
             continue
-        turn = playground_db.get_turn(feedback["turn_id"])
+        turn = battleground_db.get_turn(feedback["turn_id"])
         if turn is None:
             continue
-        responses = playground_db.list_responses_for_turn(turn["id"])
+        responses = battleground_db.list_responses_for_turn(turn["id"])
         chosen_id = feedback["chosen_response_id"]
         for response in responses:
             if response["id"] == chosen_id or response["error"]:
@@ -1135,13 +1214,13 @@ def _iter_dpo_pairs(test_ids: list[str]):
             )
     # Judge pairwise verdicts.
     for test_id in test_ids:
-        for run in playground_db.list_judge_runs(test_id = test_id, limit = 500):
+        for run in battleground_db.list_judge_runs(test_id = test_id, limit = 500):
             if run["status"] != "done":
                 continue
-            for result in playground_db.list_judge_results(run["id"]):
+            for result in battleground_db.list_judge_results(run["id"]):
                 if result["winner"] not in {"a", "b"} or not result.get("response_a_id"):
                     continue
-                turn = playground_db.get_turn(result["turn_id"])
+                turn = battleground_db.get_turn(result["turn_id"])
                 if turn is None:
                     continue
                 chosen_id = (
@@ -1150,8 +1229,8 @@ def _iter_dpo_pairs(test_ids: list[str]):
                 rejected_id = (
                     result["response_b_id"] if result["winner"] == "a" else result["response_a_id"]
                 )
-                chosen = playground_db.get_response(chosen_id)
-                rejected = playground_db.get_response(rejected_id)
+                chosen = battleground_db.get_response(chosen_id)
+                rejected = battleground_db.get_response(rejected_id)
                 if (
                     chosen is None
                     or rejected is None
@@ -1177,12 +1256,13 @@ def _iter_dpo_pairs(test_ids: list[str]):
 def export_dpo(
     test_id: Optional[str] = None,
     source: str = Query("all", pattern = "^(all|human|judge)$"),
+    format: str = Query("jsonl", pattern = "^(jsonl|zip)$"),
     current_subject: str = Depends(get_current_subject),
 ):
     tests = (
-        [playground_db.get_test(test_id)]
+        [battleground_db.get_test(test_id)]
         if test_id
-        else playground_db.list_tests(include_archived = True)
+        else battleground_db.list_tests(include_archived = True)
     )
     test_ids = [t["id"] for t in tests if t]
     lines = []
@@ -1201,37 +1281,63 @@ def export_dpo(
                 ensure_ascii = False,
             )
         )
-    return _jsonl_response(lines, filename = "playground_dpo.jsonl")
+    return _jsonl_response(lines, filename = "battleground_dpo.jsonl", format = format)
 
 
-def _jsonl_response(lines: list[str], filename: str) -> Response:
+def _jsonl_response(lines: list[str], filename: str, format: str = "jsonl") -> Response:
     from fastapi import Response
+    content = "\n".join(lines) + ("\n" if lines else "")
+    if format == "zip":
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w", compression = zipfile.ZIP_DEFLATED) as bundle:
+            bundle.writestr(filename, content)
+        archive_filename = f"{filename.removesuffix('.jsonl')}.zip"
+        return Response(
+            content = archive.getvalue(),
+            media_type = "application/zip",
+            headers = {
+                "Content-Disposition": f'attachment; filename="{archive_filename}"',
+                "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "no-store",
+            },
+        )
     return Response(
-        content = "\n".join(lines) + ("\n" if lines else ""),
-        media_type = "application/jsonl",
-        headers = {"Content-Disposition": f'attachment; filename="{filename}"'},
+        content = content,
+        # ``application/jsonl`` is not consistently recognized by browsers and
+        # can trigger download protection. The attachment filename still tells
+        # clients that this is newline-delimited JSON.
+        media_type = "application/octet-stream",
+        headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-store",
+        },
     )
 
 
 @router.get("/reports/export/sft")
-def export_sft(test_id: Optional[str] = None, current_subject: str = Depends(get_current_subject)):
+def export_sft(
+    test_id: Optional[str] = None,
+    format: str = Query("jsonl", pattern = "^(jsonl|zip)$"),
+    current_subject: str = Depends(get_current_subject),
+):
     tests = (
-        [playground_db.get_test(test_id)]
+        [battleground_db.get_test(test_id)]
         if test_id
-        else playground_db.list_tests(include_archived = True)
+        else battleground_db.list_tests(include_archived = True)
     )
     test_ids = [t["id"] for t in tests if t]
     lines = []
     seen_responses: set[str] = set()
-    for feedback in playground_db.list_feedback_for_tests(test_ids):
+    for feedback in battleground_db.list_feedback_for_tests(test_ids):
         if feedback["kind"] != "rating" or feedback["rating"] != "good":
             continue
         if not feedback["response_id"] or feedback["response_id"] in seen_responses:
             continue
-        response = playground_db.get_response(feedback["response_id"])
+        response = battleground_db.get_response(feedback["response_id"])
         if response is None or response["error"] or not response["content"]:
             continue
-        turn = playground_db.get_turn(response["turn_id"])
+        turn = battleground_db.get_turn(response["turn_id"])
         if turn is None:
             continue
         seen_responses.add(response["id"])
@@ -1248,29 +1354,31 @@ def export_sft(test_id: Optional[str] = None, current_subject: str = Depends(get
                 ensure_ascii = False,
             )
         )
-    return _jsonl_response(lines, filename = "playground_sft.jsonl")
+    return _jsonl_response(lines, filename = "battleground_sft.jsonl", format = format)
 
 
 @router.get("/reports/export/failures")
 def export_failures(
-    test_id: Optional[str] = None, current_subject: str = Depends(get_current_subject)
+    test_id: Optional[str] = None,
+    format: str = Query("jsonl", pattern = "^(jsonl|zip)$"),
+    current_subject: str = Depends(get_current_subject),
 ):
     tests = (
-        [playground_db.get_test(test_id)]
+        [battleground_db.get_test(test_id)]
         if test_id
-        else playground_db.list_tests(include_archived = True)
+        else battleground_db.list_tests(include_archived = True)
     )
     test_ids = [t["id"] for t in tests if t]
     lines = []
-    for feedback in playground_db.list_feedback_for_tests(test_ids):
+    for feedback in battleground_db.list_feedback_for_tests(test_ids):
         if feedback["kind"] != "rating" or feedback["rating"] != "bad":
             continue
         if not feedback["response_id"]:
             continue
-        response = playground_db.get_response(feedback["response_id"])
+        response = battleground_db.get_response(feedback["response_id"])
         if response is None:
             continue
-        turn = playground_db.get_turn(response["turn_id"])
+        turn = battleground_db.get_turn(response["turn_id"])
         if turn is None:
             continue
         lines.append(
@@ -1285,7 +1393,7 @@ def export_failures(
                 ensure_ascii = False,
             )
         )
-    return _jsonl_response(lines, filename = "playground_failures.jsonl")
+    return _jsonl_response(lines, filename = "battleground_failures.jsonl", format = format)
 
 
 @router.get("/reports/export/feedback.csv")
@@ -1293,9 +1401,9 @@ def export_feedback_csv(
     test_id: Optional[str] = None, current_subject: str = Depends(get_current_subject)
 ):
     tests = (
-        [playground_db.get_test(test_id)]
+        [battleground_db.get_test(test_id)]
         if test_id
-        else playground_db.list_tests(include_archived = True)
+        else battleground_db.list_tests(include_archived = True)
     )
     test_ids = [t["id"] for t in tests if t]
     output = io.StringIO()
@@ -1313,15 +1421,15 @@ def export_feedback_csv(
             "response_content",
         ]
     )
-    sources = {s["id"]: s["name"] for s in playground_db.list_sources()}
-    for feedback in playground_db.list_feedback_for_tests(test_ids):
+    sources = {s["id"]: s["name"] for s in battleground_db.list_sources()}
+    for feedback in battleground_db.list_feedback_for_tests(test_ids):
         prompt = ""
         source_name = ""
         content = ""
         if feedback["response_id"]:
-            response = playground_db.get_response(feedback["response_id"])
+            response = battleground_db.get_response(feedback["response_id"])
             if response:
-                turn = playground_db.get_turn(response["turn_id"])
+                turn = battleground_db.get_turn(response["turn_id"])
                 prompt = turn["prompt"] if turn else ""
                 source_name = sources.get(response["source_id"], response["source_id"])
                 content = response["content"]
@@ -1343,7 +1451,7 @@ def export_feedback_csv(
     return Response(
         content = output.getvalue(),
         media_type = "text/csv",
-        headers = {"Content-Disposition": 'attachment; filename="playground_feedback.csv"'},
+        headers = {"Content-Disposition": 'attachment; filename="battleground_feedback.csv"'},
     )
 
 
@@ -1363,9 +1471,9 @@ def _extract_token(request: Request) -> Optional[str]:
 
 
 def _verify_public_or_404(ref: str, request: Request) -> None:
-    if not verify_playground_ref(ref, _extract_token(request)):
+    if not verify_battleground_ref(ref, _extract_token(request)):
         raise HTTPException(status_code = 404, detail = "Not found")
-    if not get_playground_sharing_enabled():
+    if not get_battleground_sharing_enabled():
         raise HTTPException(status_code = 404, detail = "Not found")
 
 
@@ -1388,10 +1496,10 @@ _PUBLIC_CSP = (
 @public_router.get("/t/{test_id}")
 def public_test_page(test_id: str, request: Request):
     _verify_public_or_404(f"t/{test_id}", request)
-    test = playground_db.get_test(test_id)
+    test = battleground_db.get_test(test_id)
     if test is None:
         raise HTTPException(status_code = 404, detail = "Not found")
-    page_path = _ASSETS_DIR / "playground_page.html"
+    page_path = _ASSETS_DIR / "battleground_page.html"
     html = page_path.read_text(encoding = "utf-8")
     html = html.replace("__TITLE__", _html_escape(test["name"]))
     return HTMLResponse(
@@ -1413,11 +1521,20 @@ def _html_escape(text: str) -> str:
 def public_test_config(test_id: str, request: Request):
     _verify_public_or_404(f"t/{test_id}", request)
     _enforce_public_rate_limit(request)
-    test = playground_db.get_test(test_id)
+    test = battleground_db.get_test(test_id)
     if test is None:
         raise HTTPException(status_code = 404, detail = "Not found")
+    if test["status"] != "active":
+        return {
+            "session_id": None,
+            "test_name": test["name"],
+            "status": test["status"],
+            "labels": [],
+            "show_model_cards": bool(test["show_model_cards"]),
+            "reveal_after_vote": bool(test["reveal_after_vote"]),
+        }
     slots = test["slots"]
-    sources = {s["id"]: s for s in playground_db.list_sources()}
+    sources = {s["id"]: s for s in battleground_db.list_sources()}
 
     # Randomize label order per session to kill position bias.
     order = list(range(len(slots)))
@@ -1432,10 +1549,11 @@ def public_test_config(test_id: str, request: Request):
         label_map[source["id"]] = label
         labels.append(label)
 
-    session = playground_db.create_session(mode = "public", test_id = test["id"], label_map = label_map)
+    session = battleground_db.create_session(mode = "public", test_id = test["id"], label_map = label_map)
     config = {
         "session_id": session["id"],
         "test_name": test["name"],
+        "status": test["status"],
         "labels": labels,
         "show_model_cards": bool(test["show_model_cards"]),
         "reveal_after_vote": bool(test["reveal_after_vote"]),
@@ -1450,7 +1568,7 @@ async def _public_fanout_chat(
     test: dict, session: dict, message: str, params: dict
 ) -> StreamingResponse:
     """Fan one user message out to every slot, streaming interleaved SSE."""
-    sources = {s["id"]: s for s in playground_db.list_sources()}
+    sources = {s["id"]: s for s in battleground_db.list_sources()}
     slots = [sources.get(slot["source_id"]) for slot in test["slots"]]
     slots = [s for s in slots if s is not None]
     label_map = session.get("label_map") or {}
@@ -1460,13 +1578,13 @@ async def _public_fanout_chat(
     sampling.setdefault("max_tokens", _PUBLIC_MAX_OUTPUT_TOKENS)
     sampling["max_tokens"] = min(sampling["max_tokens"], _PUBLIC_MAX_OUTPUT_TOKENS)
 
-    turn = playground_db.create_turn(session["id"], message, sampling)
+    turn = battleground_db.create_turn(session["id"], message, sampling)
     test_show_cards = bool(test.get("show_model_cards"))
 
     # Per-slot conversation context from the server-side transcript.
-    history: list[dict] = playground_db.list_turns(session["id"])
+    history: list[dict] = battleground_db.list_turns(session["id"])
     responses_by_turn: dict[str, dict[str, dict]] = {}
-    for response in playground_db.list_responses_for_session(session["id"]):
+    for response in battleground_db.list_responses_for_session(session["id"]):
         responses_by_turn.setdefault(response["turn_id"], {})[response["source_id"]] = response
 
     def _slot_messages(source: dict) -> list[dict]:
@@ -1492,8 +1610,8 @@ async def _public_fanout_chat(
             label = label_map.get(source["id"], source["name"])
             try:
                 target = resolve_source_target(source)
-            except PlaygroundProxyError as exc:
-                response = playground_db.create_response(
+            except BattlegroundProxyError as exc:
+                response = battleground_db.create_response(
                     turn_id = turn["id"],
                     session_id = session["id"],
                     source_id = source["id"],
@@ -1523,7 +1641,7 @@ async def _public_fanout_chat(
                         await queue.put({"label": label, **event})
                     else:
                         final = event
-                response = playground_db.create_response(
+                response = battleground_db.create_response(
                     turn_id = turn["id"],
                     session_id = session["id"],
                     source_id = source["id"],
@@ -1547,8 +1665,8 @@ async def _public_fanout_chat(
                 if test_show_cards:
                     payload["model_name"] = response["model_identity"]
                 await queue.put(payload)
-            except PlaygroundProxyError as exc:
-                response = playground_db.create_response(
+            except BattlegroundProxyError as exc:
+                response = battleground_db.create_response(
                     turn_id = turn["id"],
                     session_id = session["id"],
                     source_id = source["id"],
@@ -1623,15 +1741,22 @@ async def _read_json_body(request: Request) -> dict:
 async def public_test_chat(test_id: str, request: Request):
     _verify_public_or_404(f"t/{test_id}", request)
     _enforce_public_rate_limit(request)
-    test = playground_db.get_test(test_id)
+    test = battleground_db.get_test(test_id)
     if test is None:
         raise HTTPException(status_code = 404, detail = "Not found")
+    if test["status"] != "active":
+        raise HTTPException(status_code = 410, detail = "This A/B test has ended")
     body = _PublicChatBody(await _read_json_body(request))
     if not body.session_id or not body.message.strip():
         raise HTTPException(status_code = 400, detail = "session_id and message are required")
-    session = playground_db.get_session(body.session_id)
+    session = battleground_db.get_session(body.session_id)
     if session is None or session.get("test_id") != test["id"] or session["mode"] != "public":
         raise HTTPException(status_code = 400, detail = "Invalid session for this test")
+    if session.get("finished_at"):
+        raise HTTPException(
+            status_code = 400,
+            detail = "This session is finished — reload the page for a fresh comparison",
+        )
     params = {}
     for key in ("temperature", "top_p", "max_tokens"):
         value = getattr(body, key, None)
@@ -1644,11 +1769,13 @@ async def public_test_chat(test_id: str, request: Request):
 async def public_test_feedback(test_id: str, request: Request):
     _verify_public_or_404(f"t/{test_id}", request)
     _enforce_public_rate_limit(request)
-    test = playground_db.get_test(test_id)
+    test = battleground_db.get_test(test_id)
     if test is None:
         raise HTTPException(status_code = 404, detail = "Not found")
+    if test["status"] != "active":
+        raise HTTPException(status_code = 410, detail = "This A/B test has ended")
     data = await _read_json_body(request)
-    payload = PlaygroundFeedbackRequest(
+    payload = BattlegroundFeedbackRequest(
         session_id = str(data.get("session_id") or ""),
         kind = data.get("kind") or "rating",
         turn_id = data.get("turn_id"),
@@ -1658,10 +1785,50 @@ async def public_test_feedback(test_id: str, request: Request):
         comment = data.get("comment"),
         chosen_response_id = data.get("chosen_response_id"),
     )
-    session = playground_db.get_session(payload.session_id)
+    session = battleground_db.get_session(payload.session_id)
     if session is None or session.get("test_id") != test["id"] or session["mode"] != "public":
         raise HTTPException(status_code = 400, detail = "Invalid session for this test")
     return _store_feedback(payload, public = True)
+
+
+@public_router.post("/t/{test_id}/finish")
+async def public_test_finish(test_id: str, request: Request):
+    """Tester explicitly ends the conversation; reveal every turn at once.
+
+    Blind testing gate: a pick-best vote is required on every turn of the
+    session before identities are released, so votes stay unbiased and
+    identities can't be had for free.
+    """
+    _verify_public_or_404(f"t/{test_id}", request)
+    _enforce_public_rate_limit(request)
+    test = battleground_db.get_test(test_id)
+    if test is None:
+        raise HTTPException(status_code = 404, detail = "Not found")
+    if test["status"] != "active":
+        raise HTTPException(status_code = 410, detail = "This A/B test has ended")
+    if not test["reveal_after_vote"] or test["show_model_cards"]:
+        # Identities are either never revealed or were public from the start;
+        # the page only shows the finish action in the blind case.
+        raise HTTPException(status_code = 400, detail = "Reveal-on-finish is not enabled for this test")
+    body = await _read_json_body(request)
+    session_id = str(body.get("session_id") or "")[:64]
+    session = battleground_db.get_session(session_id)
+    if session is None or session.get("test_id") != test["id"] or session["mode"] != "public":
+        raise HTTPException(status_code = 400, detail = "Invalid session for this test")
+    turns = battleground_db.list_turns(session_id)
+    if not turns:
+        raise HTTPException(status_code = 400, detail = "Nothing to finish yet — send a message first")
+    voted_turn_ids = {
+        feedback["turn_id"]
+        for feedback in battleground_db.list_feedback(session_id = session_id)
+        if feedback["kind"] == "pick_best" and feedback["turn_id"]
+    }
+    pending = [turn["id"] for turn in turns if turn["id"] not in voted_turn_ids]
+    if pending:
+        return {"finished": False, "pending_turns": len(pending)}
+    battleground_db.finish_session(session_id)
+    reveals = {turn["id"]: _revealed_map(session, turn["id"]) for turn in turns}
+    return {"finished": True, "reveals": reveals}
 
 
 @public_router.post("/t/{test_id}/reveal/{turn_id}")
@@ -1669,13 +1836,15 @@ def public_test_reveal(test_id: str, turn_id: str, request: Request):
     """Ask whether a turn's identities may be shown (post-vote reveal)."""
     _verify_public_or_404(f"t/{test_id}", request)
     _enforce_public_rate_limit(request)
-    test = playground_db.get_test(test_id)
+    test = battleground_db.get_test(test_id)
     if test is None:
         raise HTTPException(status_code = 404, detail = "Not found")
-    turn = playground_db.get_turn(turn_id)
+    if test["status"] != "active":
+        raise HTTPException(status_code = 410, detail = "This A/B test has ended")
+    turn = battleground_db.get_turn(turn_id)
     if turn is None:
         raise HTTPException(status_code = 404, detail = "Turn not found")
-    session = playground_db.get_session(turn["session_id"])
+    session = battleground_db.get_session(turn["session_id"])
     if session is None or session.get("test_id") != test["id"]:
         raise HTTPException(status_code = 400, detail = "Turn does not belong to this test")
     if not turn["revealed"]:

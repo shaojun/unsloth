@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>__TITLE__ · Unsloth Playground</title>
+    <title>__TITLE__ · Unsloth Battleground</title>
     <style>
       @font-face {
         font-family: "Hellix";
@@ -92,8 +92,13 @@
         white-space: nowrap;
         max-width: 40%;
       }
-      .badge {
+      .header-actions {
         margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+      }
+      .badge {
         font-size: 11.5px;
         font-weight: 600;
         padding: 3px 9px;
@@ -334,6 +339,25 @@
         color: var(--primary);
         font-weight: 600;
       }
+      .finish-btn {
+        border: 1px solid var(--primary);
+        background: var(--primary-soft);
+        color: var(--primary);
+        border-radius: 999px;
+        padding: 4px 12px;
+        font-size: 12px;
+        font-weight: 600;
+        white-space: nowrap;
+        cursor: pointer;
+      }
+      .finish-btn:hover:not(:disabled) {
+        background: var(--primary);
+        color: #fff;
+      }
+      .finish-btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
       footer.composer {
         border-top: 1px solid var(--border);
         padding: 12px 16px 16px;
@@ -386,6 +410,16 @@
         margin: 0 auto 12px;
         max-width: 66rem;
       }
+      .status-banner {
+        background: var(--primary-soft);
+        color: var(--muted);
+        border-radius: 10px;
+        padding: 10px 14px;
+        font-size: 13px;
+        margin: 0 auto 12px;
+        max-width: 66rem;
+        text-align: center;
+      }
       .hint {
         font-size: 12px;
         color: var(--muted);
@@ -396,9 +430,20 @@
   </head>
   <body>
     <header>
-      <span class="brand">Unsloth Playground</span>
+      <span class="brand">Unsloth Battleground</span>
       <span class="test-name" id="test-name"></span>
-      <span class="badge" id="mode-badge"></span>
+      <div class="header-actions">
+        <span class="badge" id="mode-badge"></span>
+        <button
+          id="finish"
+          class="finish-btn"
+          type="button"
+          hidden
+          title="Ends this session and shows which model was Model A / Model B. Every turn needs a pick-best vote first."
+        >
+          🔒 Finish &amp; reveal models
+        </button>
+      </div>
     </header>
     <main id="log">
       <div id="thread">
@@ -434,7 +479,7 @@
         ];
         const params = new URLSearchParams(location.search);
         const token = params.get("k") || "";
-        // Path is /pg/t/{test_id} — the id is the third non-empty segment.
+        // Path is /bg/t/{test_id} — the id is the third non-empty segment.
         const segments = location.pathname.split("/").filter(Boolean);
         const testId = segments.length >= 3 ? segments[2] : "";
         const $ = (sel) => document.querySelector(sel);
@@ -446,6 +491,7 @@
           showModelCards: false,
           revealAfterVote: true,
           modelNames: {},
+          finished: false,
           busy: false,
           turns: [], // {el, panels: {label: {textEl, respId, feedback}}}
         };
@@ -460,7 +506,9 @@
                 const body = await resp.json();
                 if (typeof body.detail === "string") detail = body.detail;
               } catch (e) {}
-              throw new Error(detail);
+              const err = new Error(detail);
+              err.status = resp.status;
+              throw err;
             }
             return resp;
           });
@@ -479,15 +527,29 @@
             return;
           }
           try {
-            const resp = await api(`/pg/t/${encodeURIComponent(testId)}/config`);
+            const resp = await api(`/bg/t/${encodeURIComponent(testId)}/config`);
             const config = await resp.json();
             state.sessionId = config.session_id;
+            if (config.status !== "active") {
+              state.finished = true;
+              $("#test-name").textContent = config.test_name || "";
+              document.title = (config.test_name || "Model test") + " · Test ended";
+              $("#mode-badge").textContent = "Test ended";
+              $("#welcome h1").textContent = "This A/B test has ended";
+              $("#welcome-sub").textContent = "The test owner stopped this comparison, so new messages are no longer accepted.";
+              $("#input").disabled = true;
+              $("#send").disabled = true;
+              $("#input").placeholder = "This test has ended";
+              $("#hint").textContent = "Your previous responses remain available to the test owner.";
+              $("#finish").hidden = true;
+              return;
+            }
             state.labels = config.labels || [];
             state.showModelCards = !!config.show_model_cards;
             state.revealAfterVote = !!config.reveal_after_vote;
             state.modelNames = config.model_names || {};
             $("#test-name").textContent = config.test_name || "";
-            document.title = (config.test_name || "Model test") + " · Unsloth Playground";
+            document.title = (config.test_name || "Model test") + " · Unsloth Battleground";
             const single = state.labels.length === 1;
             $("#mode-badge").textContent = single
               ? "1 model"
@@ -499,9 +561,12 @@
               : state.showModelCards
                 ? "Same message goes to every model. Rate responses and pick the best."
                 : "The same message goes to each hidden model. Rate responses, pick the best, then see which was which.";
-            $("#hint").textContent = state.revealAfterVote && !state.showModelCards && !single
-              ? "Model identities are revealed after you pick the best response of a turn."
+            const blindMulti = state.revealAfterVote && !state.showModelCards && !single;
+            $("#hint").textContent = blindMulti
+              ? "Vote on every turn — then Finish & reveal models (top right) shows which was which."
               : "";
+            // Blind multi-model tests get the explicit finish & reveal action.
+            $("#finish").hidden = !blindMulti;
           } catch (err) {
             showError(err.message);
           }
@@ -615,7 +680,7 @@
             if (!rating || !panelState.respId) return;
             send.disabled = true;
             try {
-              await api(`/pg/t/${encodeURIComponent(testId)}/feedback`, {
+              await api(`/bg/t/${encodeURIComponent(testId)}/feedback`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -689,7 +754,7 @@
           turn.pickDone = true;
           document.querySelectorAll(".pick-btn").forEach((b) => (b.disabled = true));
           try {
-            const resp = await api(`/pg/t/${encodeURIComponent(testId)}/feedback`, {
+            await api(`/bg/t/${encodeURIComponent(testId)}/feedback`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -700,16 +765,10 @@
                 comment: label === "__tie__" ? "(reported tie)" : null,
               }),
             });
-            const data = await resp.json();
-            if (data.revealed) {
-              applyReveal(turn, data.revealed);
-            } else if (state.revealAfterVote) {
-              const revealResp = await api(
-                `/pg/t/${encodeURIComponent(testId)}/reveal/${encodeURIComponent(turn.turnId)}`,
-                { method: "POST" },
+            if (state.revealAfterVote && !state.showModelCards && state.labels.length > 1) {
+              turn.el.appendChild(
+                el("div", "picked-note", "Vote saved — finish the test (top right) to reveal the models."),
               );
-              const revealData = await revealResp.json();
-              if (revealData.revealed) applyReveal(turn, revealData.model_names);
             }
           } catch (err) {
             showError(err.message);
@@ -727,15 +786,57 @@
               head.appendChild(el("span", "model-name", name));
             }
           }
-          const line = el("div", "reveal-line", "🔒 Identities revealed — thanks for voting!");
-          turn.el.appendChild(line);
-          $("#log").scrollTop = $("#log").scrollHeight;
+        }
+
+        async function finishSession() {
+          if (state.finished || !state.sessionId) return;
+          const btn = $("#finish");
+          btn.disabled = true;
+          try {
+            const resp = await api(`/bg/t/${encodeURIComponent(testId)}/finish`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ session_id: state.sessionId }),
+            });
+            const data = await resp.json();
+            if (!data.finished) {
+              showError(
+                (data.pending_turns || 0) > 0
+                  ? data.pending_turns + " turn(s) still need a pick-best vote — vote on each turn, then finish."
+                  : "Send a message and vote on every turn first.",
+              );
+              btn.disabled = false;
+              return;
+            }
+            state.finished = true;
+            for (const [turnId, names] of Object.entries(data.reveals || {})) {
+              const turn = state.turns.find((t) => t.turnId === turnId);
+              if (turn) applyReveal(turn, names);
+            }
+            const banner = el(
+              "div",
+              "reveal-line",
+              "🔒 Test complete — models revealed. Reload the page for a fresh comparison.",
+            );
+            thread.appendChild(banner);
+            $("#input").disabled = true;
+            $("#send").disabled = true;
+            $("#finish").hidden = true;
+            $("#log").scrollTop = $("#log").scrollHeight;
+          } catch (err) {
+            showError(
+              err.status === 404 || err.status === 405
+                ? "This page is newer than the running server — restart Studio to enable Finish & reveal, then try again."
+                : err.message,
+            );
+            btn.disabled = false;
+          }
         }
 
         async function send() {
           const input = $("#input");
           const message = input.value.trim();
-          if (!message || state.busy || !state.sessionId) return;
+          if (!message || state.busy || state.finished || !state.sessionId) return;
           state.busy = true;
           $("#send").disabled = true;
           input.value = "";
@@ -743,7 +844,7 @@
           const turn = newTurn(message);
           try {
             const resp = await fetch(
-              `/pg/t/${encodeURIComponent(testId)}/chat?k=${encodeURIComponent(token)}`,
+              `/bg/t/${encodeURIComponent(testId)}/chat?k=${encodeURIComponent(token)}`,
               {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -800,12 +901,14 @@
             showError(err.message);
           } finally {
             state.busy = false;
-            $("#send").disabled = false;
-            input.focus();
+            $("#send").disabled = state.finished;
+            input.disabled = state.finished;
+            if (!state.finished) input.focus();
           }
         }
 
         $("#send").addEventListener("click", send);
+        $("#finish").addEventListener("click", finishSession);
         $("#input").addEventListener("keydown", (event) => {
           if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();

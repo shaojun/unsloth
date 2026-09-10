@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Mock OpenAI-compatible server for Model Playground end-to-end testing.
+"""Mock OpenAI-compatible server for Model Battleground end-to-end testing.
 
 Stands in for external LLM endpoints (and vLLM) on machines without a GPU:
 - GET  /v1/models            -> model catalog
@@ -10,7 +10,7 @@ the model id; requests carrying the judge system prompt (contains "impartial
 judge") get a valid judge JSON verdict whose winner is derived from a stable
 hash of the prompt so reports have interesting, reproducible data.
 
-Usage: python playground_mock_openai.py [--port 8899] [--key sk-mock]
+Usage: python battleground_mock_openai.py [--port 8899] [--key sk-mock]
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def _normal_reply(model: str, messages: list[dict]) -> str:
     return (
         f"[{model}] Here is my response to: \"{topic}\". "
         f"I produce a clear, structured answer with {(len(words) % 5) + 2} key points. "
-        "This is a deterministic mock response for playground end-to-end testing."
+        "This is a deterministic mock response for battleground end-to-end testing."
     )
 
 

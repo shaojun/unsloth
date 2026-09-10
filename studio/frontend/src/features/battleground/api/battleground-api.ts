@@ -3,11 +3,11 @@
 
 import { authFetch } from "@/features/auth";
 
-export type PlaygroundSourceKind = "external_openai";
+export type BattlegroundSourceKind = "external_openai";
 
-export interface PlaygroundSource {
+export interface BattlegroundSource {
   id: string;
-  kind: PlaygroundSourceKind;
+  kind: BattlegroundSourceKind;
   name: string;
   ref: string;
   external_model: string | null;
@@ -18,7 +18,7 @@ export interface PlaygroundSource {
 }
 
 /** A successfully trained run, for the manual `vllm serve` hosting hints. */
-export interface PlaygroundTrainedModel {
+export interface BattlegroundTrainedModel {
   run_id: string;
   name: string;
   model_name: string | null;
@@ -28,14 +28,14 @@ export interface PlaygroundTrainedModel {
   finished_at: string | null;
 }
 
-export interface PlaygroundTestSlot {
+export interface BattlegroundTestSlot {
   source_id: string;
   source_name: string;
-  kind: PlaygroundSourceKind | null;
+  kind: BattlegroundSourceKind | null;
   ready: boolean;
 }
 
-export interface PlaygroundTest {
+export interface BattlegroundTest {
   id: string;
   name: string;
   status: "active" | "archived";
@@ -43,16 +43,19 @@ export interface PlaygroundTest {
   reveal_after_vote: boolean;
   system_prompt: string | null;
   sampling: Record<string, unknown>;
-  slots: PlaygroundTestSlot[];
+  slots: BattlegroundTestSlot[];
   created_at: string;
   updated_at: string;
   share_url: string;
 }
 
-export interface PlaygroundJudgeRun {
+export interface BattlegroundJudgeRun {
   id: string;
-  test_id: string;
-  test_name?: string;
+  test_id: string | null;
+  test_name?: string | null;
+  /** Participant source ids (standalone runs; legacy runs fall back to test slots). */
+  source_ids?: string[];
+  source_names?: string[];
   prompt_set_id: string;
   judge_source_id: string;
   judge_source_name?: string;
@@ -67,7 +70,7 @@ export interface PlaygroundJudgeRun {
   config: Record<string, unknown>;
 }
 
-export interface PlaygroundJudgeResult {
+export interface BattlegroundJudgeResult {
   id: string;
   run_id: string;
   prompt_id: string;
@@ -81,7 +84,7 @@ export interface PlaygroundJudgeResult {
   judge_meta: Record<string, unknown>;
 }
 
-export interface PlaygroundPromptSet {
+export interface BattlegroundPromptSet {
   id: string;
   name: string;
   description: string | null;
@@ -90,7 +93,7 @@ export interface PlaygroundPromptSet {
   created_at: string;
 }
 
-export interface PlaygroundPrompt {
+export interface BattlegroundPrompt {
   id: string;
   set_id: string;
   prompt: string;
@@ -99,7 +102,7 @@ export interface PlaygroundPrompt {
   order_idx: number;
 }
 
-export interface PlaygroundReportSource {
+export interface BattlegroundReportSource {
   source_id: string;
   name: string;
   kind: string | null;
@@ -135,9 +138,9 @@ export interface PlaygroundReportSource {
   errors: number;
 }
 
-export interface PlaygroundReport {
+export interface BattlegroundReport {
   scope: { test_id: string | null; test_count: number; sessions: number };
-  per_source: PlaygroundReportSource[];
+  per_source: BattlegroundReportSource[];
   pairwise: {
     source_a: string;
     source_b: string;
@@ -147,21 +150,6 @@ export interface PlaygroundReport {
     judge: { a_wins: number; b_wins: number; ties: number };
   }[];
 }
-
-export const FEEDBACK_TAGS = [
-  "correct",
-  "instruction-following",
-  "helpful",
-  "style",
-  "hallucination",
-  "wrong-answer",
-  "refused",
-  "unsafe",
-  "too-verbose",
-  "too-short",
-  "formatting",
-  "other",
-] as const;
 
 async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await authFetch(path, init);
@@ -173,7 +161,8 @@ async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
         message = body.detail;
       } else if (body.detail && typeof body.detail === "object") {
         const structured = body.detail as { message?: unknown };
-        if (typeof structured.message === "string") message = structured.message;
+        if (typeof structured.message === "string")
+          message = structured.message;
       }
     } catch {
       /* fall through with generic message */
@@ -204,126 +193,162 @@ export function del(path: string): Promise<unknown> {
   return jsonFetch(path, { method: "DELETE" });
 }
 
-export const playgroundApi = {
+export const battlegroundApi = {
   // Sources
-  listSources: () => jsonFetch<PlaygroundSource[]>("/api/playground/sources"),
+  listSources: () =>
+    jsonFetch<BattlegroundSource[]>("/api/battleground/sources"),
   createSource: (body: Record<string, unknown>) =>
-    jsonFetch<PlaygroundSource>("/api/playground/sources", {
+    jsonFetch<BattlegroundSource>("/api/battleground/sources", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
   updateSource: (id: string, body: Record<string, unknown>) =>
-    jsonFetch<PlaygroundSource>(`/api/playground/sources/${id}`, {
+    jsonFetch<BattlegroundSource>(`/api/battleground/sources/${id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
   deleteSource: (id: string) =>
-    jsonFetch<{ ok: boolean }>(`/api/playground/sources/${id}`, {
+    jsonFetch<{ ok: boolean }>(`/api/battleground/sources/${id}`, {
       method: "DELETE",
     }),
   testSource: (id: string) =>
     jsonFetch<{ ok: boolean; models: string[]; error?: string }>(
-      `/api/playground/sources/${id}/test`,
+      `/api/battleground/sources/${id}/test`,
       { method: "POST" },
     ),
 
   // Manual hosting hints (successfully trained runs)
   trainedModels: (limit = 50) =>
-    jsonFetch<{ models: PlaygroundTrainedModel[] }>(
-      `/api/playground/trained-models?limit=${limit}`,
+    jsonFetch<{ models: BattlegroundTrainedModel[] }>(
+      `/api/battleground/trained-models?limit=${limit}`,
     ),
 
   // Play sessions
   createPlaySession: (sourceId: string) =>
-    jsonFetch<{ session_id: string }>("/api/playground/play/sessions", {
+    jsonFetch<{ session_id: string }>("/api/battleground/play/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ source_id: sourceId }),
     }),
   getPlaySession: (sessionId: string) =>
-    jsonFetch<PlaygroundPlaySession>(
-      `/api/playground/play/sessions/${sessionId}`,
+    jsonFetch<BattlegroundPlaySession>(
+      `/api/battleground/play/sessions/${sessionId}`,
     ),
-  submitFeedback: (body: Record<string, unknown>) =>
-    jsonFetch<{ ok: boolean; feedback_id: string; revealed?: Record<string, string> }>(
-      "/api/playground/feedback",
+
+  // Tests
+  listTests: (includeArchived = false) =>
+    jsonFetch<BattlegroundTest[]>(
+      `/api/battleground/tests${includeArchived ? "?include_archived=true" : ""}`,
+    ),
+  createTest: (body: Record<string, unknown>) =>
+    jsonFetch<BattlegroundTest>("/api/battleground/tests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  updateTest: (id: string, body: Record<string, unknown>) =>
+    jsonFetch<BattlegroundTest>(`/api/battleground/tests/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  deleteTest: (id: string) =>
+    jsonFetch<{ ok: boolean }>(`/api/battleground/tests/${id}`, {
+      method: "DELETE",
+    }),
+
+  // Prompt sets
+  listPromptSets: () =>
+    jsonFetch<BattlegroundPromptSet[]>("/api/battleground/prompt-sets"),
+  createPromptSet: (body: Record<string, unknown>) =>
+    jsonFetch<BattlegroundPromptSet>("/api/battleground/prompt-sets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  updatePromptSet: (id: string, body: Record<string, unknown>) =>
+    jsonFetch<BattlegroundPromptSet>(`/api/battleground/prompt-sets/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  deletePromptSet: (id: string) =>
+    jsonFetch<{ ok: boolean }>(`/api/battleground/prompt-sets/${id}`, {
+      method: "DELETE",
+    }),
+  listPrompts: (setId: string) =>
+    jsonFetch<BattlegroundPrompt[]>(
+      `/api/battleground/prompt-sets/${setId}/prompts`,
+    ),
+  addPrompt: (setId: string, body: Record<string, unknown>) =>
+    jsonFetch<BattlegroundPrompt>(
+      `/api/battleground/prompt-sets/${setId}/prompts`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       },
     ),
-
-  // Tests
-  listTests: (includeArchived = false) =>
-    jsonFetch<PlaygroundTest[]>(
-      `/api/playground/tests${includeArchived ? "?include_archived=true" : ""}`,
+  updatePrompt: (
+    setId: string,
+    promptId: string,
+    body: Record<string, unknown>,
+  ) =>
+    jsonFetch<BattlegroundPrompt>(
+      `/api/battleground/prompt-sets/${setId}/prompts/${promptId}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
     ),
-  createTest: (body: Record<string, unknown>) =>
-    jsonFetch<PlaygroundTest>("/api/playground/tests", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-  deleteTest: (id: string) =>
-    jsonFetch<{ ok: boolean }>(`/api/playground/tests/${id}`, {
-      method: "DELETE",
-    }),
-
-  // Prompt sets
-  listPromptSets: () =>
-    jsonFetch<PlaygroundPromptSet[]>("/api/playground/prompt-sets"),
-  createPromptSet: (body: Record<string, unknown>) =>
-    jsonFetch<PlaygroundPromptSet>("/api/playground/prompt-sets", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-  deletePromptSet: (id: string) =>
-    jsonFetch<{ ok: boolean }>(`/api/playground/prompt-sets/${id}`, {
-      method: "DELETE",
-    }),
-  listPrompts: (setId: string) =>
-    jsonFetch<PlaygroundPrompt[]>(`/api/playground/prompt-sets/${setId}/prompts`),
-  addPrompt: (setId: string, body: Record<string, unknown>) =>
-    jsonFetch<PlaygroundPrompt>(`/api/playground/prompt-sets/${setId}/prompts`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
+  deletePrompt: (setId: string, promptId: string) =>
+    jsonFetch<{ ok: boolean }>(
+      `/api/battleground/prompt-sets/${setId}/prompts/${promptId}`,
+      { method: "DELETE" },
+    ),
 
   // Judge
   listJudgeRuns: (testId?: string) =>
-    jsonFetch<PlaygroundJudgeRun[]>(
-      `/api/playground/judge/runs${testId ? `?test_id=${testId}` : ""}`,
+    jsonFetch<BattlegroundJudgeRun[]>(
+      `/api/battleground/judge/runs${testId ? `?test_id=${testId}` : ""}`,
     ),
   createJudgeRun: (body: Record<string, unknown>) =>
-    jsonFetch<PlaygroundJudgeRun>("/api/playground/judge/runs", {
+    jsonFetch<BattlegroundJudgeRun>("/api/battleground/judge/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
   getJudgeRun: (id: string) =>
-    jsonFetch<PlaygroundJudgeRun & { results: PlaygroundJudgeResult[] }>(
-      `/api/playground/judge/runs/${id}`,
+    jsonFetch<BattlegroundJudgeRun & { results: BattlegroundJudgeResult[] }>(
+      `/api/battleground/judge/runs/${id}`,
     ),
   cancelJudgeRun: (id: string) =>
-    jsonFetch<{ ok: boolean }>(`/api/playground/judge/runs/${id}/cancel`, {
+    jsonFetch<{ ok: boolean }>(`/api/battleground/judge/runs/${id}/cancel`, {
       method: "POST",
     }),
 
   // Reports
   reportOverview: (testId?: string) =>
-    jsonFetch<PlaygroundReport>(
-      `/api/playground/reports/overview${testId ? `?test_id=${testId}` : ""}`,
+    jsonFetch<BattlegroundReport>(
+      `/api/battleground/reports/overview${testId ? `?test_id=${testId}` : ""}`,
     ),
-  exportUrl: (kind: "dpo" | "sft" | "failures" | "feedback.csv", testId?: string) =>
-    `/api/playground/reports/export/${kind}${testId ? `?test_id=${testId}` : ""}`,
+  exportUrl: (
+    kind: "dpo" | "sft" | "failures" | "feedback.csv",
+    testId?: string,
+    format?: "jsonl" | "zip",
+  ) => {
+    const query = new URLSearchParams();
+    if (testId) query.set("test_id", testId);
+    if (format && kind !== "feedback.csv") query.set("format", format);
+    const suffix = query.size ? `?${query.toString()}` : "";
+    return `/api/battleground/reports/export/${kind}${suffix}`;
+  },
 };
 
-export interface PlaygroundPlaySessionTurn {
+export interface BattlegroundPlaySessionTurn {
   id: string;
   prompt: string;
   params: Record<string, unknown>;
@@ -337,8 +362,8 @@ export interface PlaygroundPlaySessionTurn {
   }[];
 }
 
-export interface PlaygroundPlaySession {
+export interface BattlegroundPlaySession {
   session_id: string;
-  source: PlaygroundSource | null;
-  turns: PlaygroundPlaySessionTurn[];
+  source: BattlegroundSource | null;
+  turns: BattlegroundPlaySessionTurn[];
 }

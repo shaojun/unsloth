@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""LLM-as-judge evaluation engine for the Model Playground.
+"""LLM-as-judge evaluation engine for the Battleground.
 
-Runs an A/B test's slots over a prompt set, then has a (usually stronger)
-judge model produce pairwise verdicts or rubric scores.
+Runs the participant models (picked directly for standalone auto-evals, or
+from a legacy A/B test's slots) over a prompt set, then has a (usually
+stronger) judge model produce pairwise verdicts or rubric scores.
 
 Bias hygiene built in:
 
@@ -30,13 +31,13 @@ from typing import Optional
 
 from loggers import get_logger
 
-from core.playground.proxy import (
-    PlaygroundProxyError,
+from core.battleground.proxy import (
+    BattlegroundProxyError,
     ProxyTarget,
     chat_completion_aggregate,
     resolve_source_target,
 )
-from storage import playground_db
+from storage import battleground_db
 
 logger = get_logger(__name__)
 
@@ -188,7 +189,7 @@ async def judge_pair(
         prompt = _format_pairwise_user_prompt(instruction, first, second, reference_answer)
         try:
             raw = await _judge_call(judge_target, _PAIRWISE_SYSTEM_PROMPT, prompt)
-        except PlaygroundProxyError as exc:
+        except BattlegroundProxyError as exc:
             errors.append(f"{label}: {exc}")
             continue
         parsed = _extract_json_object(raw)
@@ -269,7 +270,7 @@ async def judge_single_rubric(
     prompt = _format_rubric_user_prompt(instruction, response, reference_answer)
     try:
         raw = await _judge_call(judge_target, _RUBRIC_SYSTEM_PROMPT, prompt)
-    except PlaygroundProxyError as exc:
+    except BattlegroundProxyError as exc:
         return {"scores": {}, "reason": "", "confidence": None, "error": str(exc)}
     parsed = _extract_json_object(raw)
     if parsed is None:
@@ -323,7 +324,7 @@ async def run_judge_run(run_id: str) -> None:
     Expected to be scheduled with ``asyncio.create_task`` from the route; all
     failures are recorded on the run row, never raised.
     """
-    run = playground_db.get_judge_run(run_id)
+    run = battleground_db.get_judge_run(run_id)
     if run is None:
         return
     task = asyncio.current_task()
@@ -332,21 +333,18 @@ async def run_judge_run(run_id: str) -> None:
     try:
         await _execute_run(run)
     except asyncio.CancelledError:
-        playground_db.update_judge_run(run_id, status = "cancelled", finished = True)
+        battleground_db.update_judge_run(run_id, status = "cancelled", finished = True)
         raise
     except Exception as exc:  # noqa: BLE001 -- background task: record, don't crash
         logger.error("Judge run %s failed: %s", run_id, exc, exc_info = True)
-        playground_db.update_judge_run(run_id, status = "error", error = str(exc), finished = True)
+        battleground_db.update_judge_run(run_id, status = "error", error = str(exc), finished = True)
     finally:
         _clear_run(run_id)
 
 
 async def _execute_run(run: dict) -> None:
     run_id = run["id"]
-    test = playground_db.get_test(run["test_id"])
-    if test is None:
-        raise JudgeError("Test no longer exists")
-    judge_source = playground_db.get_source(run["judge_source_id"])
+    judge_source = battleground_db.get_source(run["judge_source_id"])
     if judge_source is None:
         raise JudgeError("Judge source no longer exists")
 
@@ -354,17 +352,32 @@ async def _execute_run(run: dict) -> None:
     max_prompts = int(config.get("max_prompts") or 0) or None
     mode = run["mode"]
 
-    slots = test.get("slots") or []
-    if not slots:
-        raise JudgeError("Test has no slots")
-    slot_sources = []
-    for slot in slots:
-        source = playground_db.get_source(slot["source_id"])
-        if source is None:
-            raise JudgeError(f"Slot source {slot['source_id']} no longer exists")
-        slot_sources.append(source)
+    # Standalone auto-evals carry their participants in config.source_ids.
+    # Legacy runs fall back to the slots of the A/B test they were scoped to.
+    config_source_ids = config.get("source_ids") or []
+    slot_sources: list[dict] = []
+    if config_source_ids:
+        for source_id in config_source_ids:
+            source = battleground_db.get_source(source_id)
+            if source is None:
+                raise JudgeError(f"Participant source {source_id} no longer exists")
+            slot_sources.append(source)
+        sampling = dict(config.get("sampling") or {})
+    else:
+        test = battleground_db.get_test(run["test_id"]) if run.get("test_id") else None
+        if test is None:
+            raise JudgeError("Test no longer exists")
+        slots = test.get("slots") or []
+        if not slots:
+            raise JudgeError("Test has no slots")
+        for slot in slots:
+            source = battleground_db.get_source(slot["source_id"])
+            if source is None:
+                raise JudgeError(f"Slot source {slot['source_id']} no longer exists")
+            slot_sources.append(source)
+        sampling = dict(test.get("sampling") or {})
 
-    prompts = playground_db.list_prompts(run["prompt_set_id"])
+    prompts = battleground_db.list_prompts(run["prompt_set_id"])
     if not prompts:
         raise JudgeError("Prompt set is empty")
     if max_prompts:
@@ -374,24 +387,23 @@ async def _execute_run(run: dict) -> None:
     judge_source_ids = {source["id"] for source in slot_sources}
     if judge_source["id"] in judge_source_ids:
         raise JudgeError(
-            "The judge source is also a model under test in this test; pick a "
+            "The judge source is also a participant model; pick a "
             "different judge to avoid self-preference bias."
         )
 
     judge_target = resolve_source_target(judge_source)
 
-    session = playground_db.create_session(
-        mode = "judge", test_id = run["test_id"], tester_label = "LLM judge"
+    session = battleground_db.create_session(
+        mode = "judge", test_id = run.get("test_id"), tester_label = "LLM judge"
     )
-    playground_db.update_judge_run(
+    battleground_db.update_judge_run(
         run_id, status = "running", session_id = session["id"], progress_total = len(prompts)
     )
 
-    sampling = test.get("sampling") or {}
     done = 0
     for prompt_row in prompts:
         if _is_cancelled(run_id):
-            playground_db.update_judge_run(run_id, status = "cancelled", finished = True)
+            battleground_db.update_judge_run(run_id, status = "cancelled", finished = True)
             return
         await _judge_one_prompt(
             run_id = run_id,
@@ -403,9 +415,9 @@ async def _execute_run(run: dict) -> None:
             sampling = sampling,
         )
         done += 1
-        playground_db.update_judge_run(run_id, progress_done = done)
+        battleground_db.update_judge_run(run_id, progress_done = done)
 
-    playground_db.update_judge_run(run_id, status = "done", finished = True)
+    battleground_db.update_judge_run(run_id, status = "done", finished = True)
 
 
 async def _judge_one_prompt(
@@ -420,7 +432,7 @@ async def _judge_one_prompt(
 ) -> None:
     instruction = prompt_row["prompt"]
     reference = prompt_row.get("reference_answer")
-    turn = playground_db.create_turn(session["id"], instruction, sampling)
+    turn = battleground_db.create_turn(session["id"], instruction, sampling)
 
     # Fan out: one completion per slot (sequential; a shared judge budget is
     # already serializing the expensive calls, and slot sources are usually
@@ -434,7 +446,7 @@ async def _judge_one_prompt(
                 [{"role": "user", "content": instruction}],
                 sampling,
             )
-            response = playground_db.create_response(
+            response = battleground_db.create_response(
                 turn_id = turn["id"],
                 session_id = session["id"],
                 source_id = source["id"],
@@ -453,8 +465,8 @@ async def _judge_one_prompt(
                     "content": result.content,
                 }
             )
-        except PlaygroundProxyError as exc:
-            response = playground_db.create_response(
+        except BattlegroundProxyError as exc:
+            response = battleground_db.create_response(
                 turn_id = turn["id"],
                 session_id = session["id"],
                 source_id = source["id"],
@@ -472,7 +484,7 @@ async def _judge_one_prompt(
             verdict = await judge_single_rubric(
                 judge_target, instruction, entry["content"], reference
             )
-            playground_db.create_judge_result(
+            battleground_db.create_judge_result(
                 run_id = run_id,
                 prompt_id = prompt_row["id"],
                 turn_id = turn["id"],
@@ -495,7 +507,7 @@ async def _judge_one_prompt(
             verdict = await judge_pair(
                 judge_target, instruction, first["content"], second["content"], reference
             )
-            playground_db.create_judge_result(
+            battleground_db.create_judge_result(
                 run_id = run_id,
                 prompt_id = prompt_row["id"],
                 turn_id = turn["id"],

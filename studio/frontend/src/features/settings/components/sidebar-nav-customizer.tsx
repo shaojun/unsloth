@@ -37,7 +37,7 @@ const ITEM_META: Record<
   audio: { icon: AudioWave01Icon, labelKey: "shell.navigation.audio" },
   recipes: { icon: ChefHatIcon, labelKey: "shell.navigation.recipes" },
   export: { icon: DownloadSquare01Icon, labelKey: "shell.navigation.export" },
-  playground: { icon: GamepadDirectionalIcon, labelKey: "shell.navigation.playground" },
+  battleground: { icon: GamepadDirectionalIcon, labelKey: "shell.navigation.battleground" },
   api: { icon: Globe02Icon, labelKey: "shell.navigation.api" },
 };
 

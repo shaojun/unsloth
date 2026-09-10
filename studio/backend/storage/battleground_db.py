@@ -1,29 +1,29 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""SQLite storage for the Model Playground.
+"""SQLite storage for the Model Battleground.
 
 Same pattern as ``studio_db.py`` / ``providers_db.py``: module-level functions,
 raw sqlite3, WAL, per-function connections, idempotent additive migrations.
 
 Domain model:
 
-* ``playground_sources``     — model catalog entries (external OpenAI-compatible
+* ``battleground_sources``     — model catalog entries (external OpenAI-compatible
   endpoints, typically a manually started ``vllm serve`` instance). External API
   keys are NOT stored here: they live in ``storage.credential_secrets`` under the
-  ``playground_api_key`` kind; this table only tracks whether one is set.
-* ``playground_tests``       — A/B (or single-model) test configuration.
-* ``playground_sessions``    — one tester's conversation on a test (or a
+  ``battleground_api_key`` kind; this table only tracks whether one is set.
+* ``battleground_tests``       — A/B (or single-model) test configuration.
+* ``battleground_sessions``    — one tester's conversation on a test (or a
   single-model play session, or a synthetic judge session).
-* ``playground_turns``       — one user message, plus the effective sampling
+* ``battleground_turns``       — one user message, plus the effective sampling
   params so feedback stays reproducible.
-* ``playground_responses``   — per (turn, source): full response text, latency,
+* ``battleground_responses``   — per (turn, source): full response text, latency,
   token usage. The real model identity lives here server-side and is only sent
-  to blind testers after their turn is revealed.
-* ``playground_feedback``    — human ratings / pick-best votes and judge
+  to blind testers after the session is finished (every turn voted).
+* ``battleground_feedback``    — human ratings / pick-best votes and judge
   verdicts (all four kinds share one table; reports split by ``kind``).
-* ``playground_prompt_sets`` / ``playground_prompts`` — evaluation batteries.
-* ``playground_judge_runs`` / ``playground_judge_results`` — LLM-as-judge jobs.
+* ``battleground_prompt_sets`` / ``battleground_prompts`` — evaluation batteries.
+* ``battleground_judge_runs`` / ``battleground_judge_results`` — LLM-as-judge jobs.
 """
 
 from __future__ import annotations
@@ -43,6 +43,9 @@ from utils.paths import studio_db_path, ensure_dir
 _schema_lock = threading.Lock()
 _schema_ready = False
 
+# Sentinel for "field not provided" in partial updates (None means "clear").
+_UNSET = object()
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -57,13 +60,86 @@ def _new_id(prefix: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+_LEGACY_TABLE_RENAMES: tuple[tuple[str, str], ...] = (
+    ("playground_sources", "battleground_sources"),
+    ("playground_tests", "battleground_tests"),
+    ("playground_sessions", "battleground_sessions"),
+    ("playground_turns", "battleground_turns"),
+    ("playground_responses", "battleground_responses"),
+    ("playground_feedback", "battleground_feedback"),
+    ("playground_prompt_sets", "battleground_prompt_sets"),
+    ("playground_prompts", "battleground_prompts"),
+    ("playground_judge_runs", "battleground_judge_runs"),
+    ("playground_judge_results", "battleground_judge_results"),
+)
+
+
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
+    ).fetchone()
+    return row is not None
+
+
+def _migrate_legacy_playground_tables(conn: sqlite3.Connection) -> None:
+    """Rename pre-battleground playground_* tables, preserving all data.
+
+    Standalone judge runs (created from a source list, not from an A/B test)
+    need a nullable ``test_id``; legacy judge-runs tables declare it NOT NULL,
+    so that one table is rebuilt instead of plain-renamed.
+    """
+    for legacy, modern in _LEGACY_TABLE_RENAMES:
+        if not _table_exists(conn, legacy) or _table_exists(conn, modern):
+            continue
+        if legacy == "playground_judge_runs":
+            # Rebuild with nullable test_id and copy the rows across.
+            conn.execute(
+                """
+                CREATE TABLE battleground_judge_runs_migrated (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    test_id TEXT,
+                    prompt_set_id TEXT NOT NULL,
+                    judge_source_id TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    config_json TEXT NOT NULL DEFAULT '{}',
+                    session_id TEXT,
+                    progress_done INTEGER NOT NULL DEFAULT 0,
+                    progress_total INTEGER NOT NULL DEFAULT 0,
+                    error TEXT,
+                    created_at TEXT NOT NULL,
+                    finished_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO battleground_judge_runs_migrated
+                SELECT id, test_id, prompt_set_id, judge_source_id, mode, status,
+                       config_json, session_id, progress_done, progress_total,
+                       error, created_at, finished_at
+                FROM playground_judge_runs
+                """
+            )
+            conn.execute("DROP TABLE playground_judge_runs")
+            conn.execute(
+                "ALTER TABLE battleground_judge_runs_migrated RENAME TO battleground_judge_runs"
+            )
+        else:
+            conn.execute(f"ALTER TABLE {legacy} RENAME TO {modern}")
+
+
 def _ensure_schema(conn: sqlite3.Connection) -> None:
-    """Create all playground tables if absent. Additive migrations only."""
+    """Create all battleground tables if absent. Additive migrations only."""
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
+    _migrate_legacy_playground_tables(conn)
+    # The legacy-table migration contains DML (copy INSERT), which opens an
+    # implicit transaction; commit so the rename survives the connection.
+    conn.commit()
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS playground_sources (
+        CREATE TABLE IF NOT EXISTS battleground_sources (
             id TEXT NOT NULL PRIMARY KEY,
             kind TEXT NOT NULL,
             name TEXT NOT NULL,
@@ -78,7 +154,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS playground_tests (
+        CREATE TABLE IF NOT EXISTS battleground_tests (
             id TEXT NOT NULL PRIMARY KEY,
             name TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'active',
@@ -94,7 +170,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS playground_sessions (
+        CREATE TABLE IF NOT EXISTS battleground_sessions (
             id TEXT NOT NULL PRIMARY KEY,
             test_id TEXT,
             mode TEXT NOT NULL,
@@ -102,13 +178,21 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             tester_label TEXT,
             label_map_json TEXT,
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            finished_at TEXT
         )
         """
     )
+    # Additive migration: sessions may be explicitly finished by the tester
+    # ("finish & reveal"); identities stay hidden until then.
+    session_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(battleground_sessions)").fetchall()
+    }
+    if "finished_at" not in session_cols:
+        conn.execute("ALTER TABLE battleground_sessions ADD COLUMN finished_at TEXT")
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS playground_turns (
+        CREATE TABLE IF NOT EXISTS battleground_turns (
             id TEXT NOT NULL PRIMARY KEY,
             session_id TEXT NOT NULL,
             prompt TEXT NOT NULL,
@@ -120,7 +204,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS playground_responses (
+        CREATE TABLE IF NOT EXISTS battleground_responses (
             id TEXT NOT NULL PRIMARY KEY,
             turn_id TEXT NOT NULL,
             session_id TEXT NOT NULL,
@@ -140,7 +224,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS playground_feedback (
+        CREATE TABLE IF NOT EXISTS battleground_feedback (
             id TEXT NOT NULL PRIMARY KEY,
             session_id TEXT NOT NULL,
             turn_id TEXT,
@@ -158,7 +242,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS playground_prompt_sets (
+        CREATE TABLE IF NOT EXISTS battleground_prompt_sets (
             id TEXT NOT NULL PRIMARY KEY,
             name TEXT NOT NULL,
             description TEXT,
@@ -170,7 +254,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS playground_prompts (
+        CREATE TABLE IF NOT EXISTS battleground_prompts (
             id TEXT NOT NULL PRIMARY KEY,
             set_id TEXT NOT NULL,
             prompt TEXT NOT NULL,
@@ -183,9 +267,10 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS playground_judge_runs (
+        CREATE TABLE IF NOT EXISTS battleground_judge_runs (
             id TEXT NOT NULL PRIMARY KEY,
-            test_id TEXT NOT NULL,
+            -- Nullable: standalone auto-eval runs are not tied to an A/B test.
+            test_id TEXT,
             prompt_set_id TEXT NOT NULL,
             judge_source_id TEXT NOT NULL,
             mode TEXT NOT NULL,
@@ -202,7 +287,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS playground_judge_results (
+        CREATE TABLE IF NOT EXISTS battleground_judge_results (
             id TEXT NOT NULL PRIMARY KEY,
             run_id TEXT NOT NULL,
             prompt_id TEXT NOT NULL,
@@ -225,27 +310,27 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
 
 def _conn_ensure_indexes(conn: sqlite3.Connection) -> None:
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_playground_turns_session ON playground_turns(session_id)"
+        "CREATE INDEX IF NOT EXISTS idx_battleground_turns_session ON battleground_turns(session_id)"
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_playground_responses_turn ON playground_responses(turn_id)"
+        "CREATE INDEX IF NOT EXISTS idx_battleground_responses_turn ON battleground_responses(turn_id)"
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_playground_responses_session ON playground_responses(session_id)"
+        "CREATE INDEX IF NOT EXISTS idx_battleground_responses_session ON battleground_responses(session_id)"
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_playground_feedback_session ON playground_feedback(session_id)"
+        "CREATE INDEX IF NOT EXISTS idx_battleground_feedback_session ON battleground_feedback(session_id)"
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_playground_judge_results_run ON playground_judge_results(run_id)"
+        "CREATE INDEX IF NOT EXISTS idx_battleground_judge_results_run ON battleground_judge_results(run_id)"
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_playground_prompts_set ON playground_prompts(set_id)"
+        "CREATE INDEX IF NOT EXISTS idx_battleground_prompts_set ON battleground_prompts(set_id)"
     )
 
 
 def get_connection() -> sqlite3.Connection:
-    """Open studio.db with WAL mode; create playground schema once per process."""
+    """Open studio.db with WAL mode; create battleground schema once per process."""
     global _schema_ready
     db_path = studio_db_path()
     ensure_dir(db_path.parent)
@@ -294,7 +379,7 @@ def create_source(
     try:
         conn.execute(
             """
-            INSERT INTO playground_sources (
+            INSERT INTO battleground_sources (
                 id, kind, name, ref, external_model, api_key_set, notes, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
@@ -349,7 +434,7 @@ def update_source(
     conn = get_connection()
     try:
         cursor = conn.execute(
-            f"UPDATE playground_sources SET {', '.join(updates)} WHERE id = ?", params
+            f"UPDATE battleground_sources SET {', '.join(updates)} WHERE id = ?", params
         )
         conn.commit()
         if cursor.rowcount == 0:
@@ -362,7 +447,7 @@ def update_source(
 def delete_source(source_id: str) -> bool:
     conn = get_connection()
     try:
-        cursor = conn.execute("DELETE FROM playground_sources WHERE id = ?", (source_id,))
+        cursor = conn.execute("DELETE FROM battleground_sources WHERE id = ?", (source_id,))
         conn.commit()
         return cursor.rowcount > 0
     finally:
@@ -372,7 +457,7 @@ def delete_source(source_id: str) -> bool:
 def get_source(source_id: str) -> Optional[dict]:
     conn = get_connection()
     try:
-        row = conn.execute("SELECT * FROM playground_sources WHERE id = ?", (source_id,)).fetchone()
+        row = conn.execute("SELECT * FROM battleground_sources WHERE id = ?", (source_id,)).fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
@@ -381,7 +466,7 @@ def get_source(source_id: str) -> Optional[dict]:
 def list_sources() -> list[dict]:
     conn = get_connection()
     try:
-        rows = conn.execute("SELECT * FROM playground_sources ORDER BY created_at").fetchall()
+        rows = conn.execute("SELECT * FROM battleground_sources ORDER BY created_at").fetchall()
         return [dict(row) for row in rows]
     finally:
         conn.close()
@@ -407,7 +492,7 @@ def create_test(
     try:
         conn.execute(
             """
-            INSERT INTO playground_tests (
+            INSERT INTO battleground_tests (
                 id, name, status, show_model_cards, reveal_after_vote,
                 system_prompt, sampling_json, slots_json, created_at, updated_at
             ) VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
@@ -471,7 +556,7 @@ def update_test(
     conn = get_connection()
     try:
         cursor = conn.execute(
-            f"UPDATE playground_tests SET {', '.join(updates)} WHERE id = ?", params
+            f"UPDATE battleground_tests SET {', '.join(updates)} WHERE id = ?", params
         )
         conn.commit()
         if cursor.rowcount == 0:
@@ -484,7 +569,7 @@ def update_test(
 def delete_test(test_id: str) -> bool:
     conn = get_connection()
     try:
-        cursor = conn.execute("DELETE FROM playground_tests WHERE id = ?", (test_id,))
+        cursor = conn.execute("DELETE FROM battleground_tests WHERE id = ?", (test_id,))
         conn.commit()
         return cursor.rowcount > 0
     finally:
@@ -494,7 +579,7 @@ def delete_test(test_id: str) -> bool:
 def get_test(test_id: str) -> Optional[dict]:
     conn = get_connection()
     try:
-        row = conn.execute("SELECT * FROM playground_tests WHERE id = ?", (test_id,)).fetchone()
+        row = conn.execute("SELECT * FROM battleground_tests WHERE id = ?", (test_id,)).fetchone()
         if row is None:
             return None
         data = dict(row)
@@ -510,7 +595,7 @@ def get_test(test_id: str) -> Optional[dict]:
 def list_tests(include_archived: bool = False) -> list[dict]:
     conn = get_connection()
     try:
-        query = "SELECT * FROM playground_tests"
+        query = "SELECT * FROM battleground_tests"
         if not include_archived:
             query += " WHERE status = 'active'"
         query += " ORDER BY created_at DESC"
@@ -547,7 +632,7 @@ def create_session(
     try:
         conn.execute(
             """
-            INSERT INTO playground_sessions (
+            INSERT INTO battleground_sessions (
                 id, test_id, mode, source_id, tester_label, label_map_json,
                 created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -573,7 +658,7 @@ def get_session(session_id: str) -> Optional[dict]:
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT * FROM playground_sessions WHERE id = ?", (session_id,)
+            "SELECT * FROM battleground_sessions WHERE id = ?", (session_id,)
         ).fetchone()
         if row is None:
             return None
@@ -588,7 +673,7 @@ def touch_session(session_id: str) -> None:
     conn = get_connection()
     try:
         conn.execute(
-            "UPDATE playground_sessions SET updated_at = ? WHERE id = ?",
+            "UPDATE battleground_sessions SET updated_at = ? WHERE id = ?",
             (_now(), session_id),
         )
         conn.commit()
@@ -600,7 +685,7 @@ def list_sessions_for_test(test_id: str) -> list[dict]:
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT * FROM playground_sessions WHERE test_id = ? ORDER BY created_at",
+            "SELECT * FROM battleground_sessions WHERE test_id = ? ORDER BY created_at",
             (test_id,),
         ).fetchall()
         out = []
@@ -625,7 +710,7 @@ def create_turn(
     try:
         conn.execute(
             """
-            INSERT INTO playground_turns (id, session_id, prompt, params_json, revealed, created_at)
+            INSERT INTO battleground_turns (id, session_id, prompt, params_json, revealed, created_at)
             VALUES (?, ?, ?, ?, 0, ?)
             """,
             (turn_id, session_id, prompt, json.dumps(params or {}), now),
@@ -647,7 +732,7 @@ def create_turn(
 def get_turn(turn_id: str) -> Optional[dict]:
     conn = get_connection()
     try:
-        row = conn.execute("SELECT * FROM playground_turns WHERE id = ?", (turn_id,)).fetchone()
+        row = conn.execute("SELECT * FROM battleground_turns WHERE id = ?", (turn_id,)).fetchone()
         if row is None:
             return None
         data = dict(row)
@@ -662,7 +747,7 @@ def list_turns(session_id: str) -> list[dict]:
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT * FROM playground_turns WHERE session_id = ? ORDER BY created_at",
+            "SELECT * FROM battleground_turns WHERE session_id = ? ORDER BY created_at",
             (session_id,),
         ).fetchall()
         out = []
@@ -679,7 +764,31 @@ def list_turns(session_id: str) -> list[dict]:
 def mark_turn_revealed(turn_id: str) -> None:
     conn = get_connection()
     try:
-        conn.execute("UPDATE playground_turns SET revealed = 1 WHERE id = ?", (turn_id,))
+        conn.execute("UPDATE battleground_turns SET revealed = 1 WHERE id = ?", (turn_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def finish_session(session_id: str) -> None:
+    """Stamp the session as finished and reveal every turn in it.
+
+    Idempotent: the finished_at stamp is only written once, and re-marking
+    already-revealed turns is a no-op.
+    """
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            UPDATE battleground_sessions
+            SET finished_at = COALESCE(finished_at, ?), updated_at = ?
+            WHERE id = ?
+            """,
+            (_now(), _now(), session_id),
+        )
+        conn.execute(
+            "UPDATE battleground_turns SET revealed = 1 WHERE session_id = ?", (session_id,)
+        )
         conn.commit()
     finally:
         conn.close()
@@ -706,7 +815,7 @@ def create_response(
     try:
         conn.execute(
             """
-            INSERT INTO playground_responses (
+            INSERT INTO battleground_responses (
                 id, turn_id, session_id, source_id, instance_id, model_identity,
                 label, content, reasoning, error, latency_ms, prompt_tokens,
                 completion_tokens, created_at
@@ -748,7 +857,7 @@ def get_response(response_id: str) -> Optional[dict]:
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT * FROM playground_responses WHERE id = ?", (response_id,)
+            "SELECT * FROM battleground_responses WHERE id = ?", (response_id,)
         ).fetchone()
         return dict(row) if row else None
     finally:
@@ -759,7 +868,7 @@ def list_responses_for_turn(turn_id: str) -> list[dict]:
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT * FROM playground_responses WHERE turn_id = ? ORDER BY created_at",
+            "SELECT * FROM battleground_responses WHERE turn_id = ? ORDER BY created_at",
             (turn_id,),
         ).fetchall()
         return [dict(row) for row in rows]
@@ -771,7 +880,7 @@ def list_responses_for_session(session_id: str) -> list[dict]:
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT * FROM playground_responses WHERE session_id = ? ORDER BY created_at",
+            "SELECT * FROM battleground_responses WHERE session_id = ? ORDER BY created_at",
             (session_id,),
         ).fetchall()
         return [dict(row) for row in rows]
@@ -807,7 +916,7 @@ def create_feedback(
     try:
         conn.execute(
             """
-            INSERT INTO playground_feedback (
+            INSERT INTO battleground_feedback (
                 id, session_id, turn_id, response_id, kind, rating, tags_json,
                 comment, chosen_response_id, judge_source_id, judge_meta_json, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -838,7 +947,7 @@ def list_feedback(
 ) -> list[dict]:
     conn = get_connection()
     try:
-        query = "SELECT * FROM playground_feedback"
+        query = "SELECT * FROM battleground_feedback"
         conditions = []
         params: list = []
         if session_id is not None:
@@ -872,8 +981,8 @@ def list_feedback_for_tests(test_ids: list[str]) -> list[dict]:
         placeholders = ", ".join("?" for _ in test_ids)
         rows = conn.execute(
             f"""
-            SELECT f.* FROM playground_feedback f
-            JOIN playground_sessions s ON s.id = f.session_id
+            SELECT f.* FROM battleground_feedback f
+            JOIN battleground_sessions s ON s.id = f.session_id
             WHERE s.test_id IN ({placeholders})
             ORDER BY f.created_at
             """,
@@ -907,7 +1016,7 @@ def create_prompt_set(
     try:
         conn.execute(
             """
-            INSERT INTO playground_prompt_sets (id, name, description, origin, created_at, updated_at)
+            INSERT INTO battleground_prompt_sets (id, name, description, origin, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
             (set_id, name, description, origin, now, now),
@@ -922,13 +1031,13 @@ def get_prompt_set(set_id: str) -> Optional[dict]:
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT * FROM playground_prompt_sets WHERE id = ?", (set_id,)
+            "SELECT * FROM battleground_prompt_sets WHERE id = ?", (set_id,)
         ).fetchone()
         if row is None:
             return None
         data = dict(row)
         data["prompt_count"] = conn.execute(
-            "SELECT COUNT(*) FROM playground_prompts WHERE set_id = ?", (set_id,)
+            "SELECT COUNT(*) FROM battleground_prompts WHERE set_id = ?", (set_id,)
         ).fetchone()[0]
         return data
     finally:
@@ -939,13 +1048,13 @@ def list_prompt_sets() -> list[dict]:
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT * FROM playground_prompt_sets ORDER BY created_at DESC"
+            "SELECT * FROM battleground_prompt_sets ORDER BY created_at DESC"
         ).fetchall()
         out = []
         for row in rows:
             data = dict(row)
             data["prompt_count"] = conn.execute(
-                "SELECT COUNT(*) FROM playground_prompts WHERE set_id = ?", (row["id"],)
+                "SELECT COUNT(*) FROM battleground_prompts WHERE set_id = ?", (row["id"],)
             ).fetchone()[0]
             out.append(data)
         return out
@@ -956,12 +1065,44 @@ def list_prompt_sets() -> list[dict]:
 def delete_prompt_set(set_id: str) -> bool:
     conn = get_connection()
     try:
-        cursor = conn.execute("DELETE FROM playground_prompt_sets WHERE id = ?", (set_id,))
-        conn.execute("DELETE FROM playground_prompts WHERE set_id = ?", (set_id,))
+        cursor = conn.execute("DELETE FROM battleground_prompt_sets WHERE id = ?", (set_id,))
+        conn.execute("DELETE FROM battleground_prompts WHERE set_id = ?", (set_id,))
         conn.commit()
         return cursor.rowcount > 0
     finally:
         conn.close()
+
+
+def update_prompt_set(
+    set_id: str,
+    name: Optional[str] = None,
+    description: object = _UNSET,
+) -> Optional[dict]:
+    """Partial update of a prompt set's metadata.
+
+    ``None`` clears a field; the ``_UNSET`` sentinel leaves it unchanged.
+    """
+    conn = get_connection()
+    try:
+        assignments = ["updated_at = ?"]
+        params: list = [_now()]
+        if name is not None:
+            assignments.append("name = ?")
+            params.append(name)
+        if description is not _UNSET:
+            assignments.append("description = ?")
+            params.append(description)  # type: ignore[arg-type]
+        params.append(set_id)
+        cursor = conn.execute(
+            f"UPDATE battleground_prompt_sets SET {', '.join(assignments)} WHERE id = ?",
+            params,
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            return None
+    finally:
+        conn.close()
+    return get_prompt_set(set_id)
 
 
 def add_prompt(
@@ -978,7 +1119,7 @@ def add_prompt(
     try:
         conn.execute(
             """
-            INSERT INTO playground_prompts (id, set_id, prompt, reference_answer, tags_json, order_idx, created_at)
+            INSERT INTO battleground_prompts (id, set_id, prompt, reference_answer, tags_json, order_idx, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
@@ -1010,7 +1151,7 @@ def add_prompts_bulk(set_id: str, prompts: list[dict]) -> int:
     now = _now()
     try:
         base_idx = conn.execute(
-            "SELECT COALESCE(MAX(order_idx), -1) + 1 FROM playground_prompts WHERE set_id = ?",
+            "SELECT COALESCE(MAX(order_idx), -1) + 1 FROM battleground_prompts WHERE set_id = ?",
             (set_id,),
         ).fetchone()[0]
         rows = []
@@ -1028,7 +1169,7 @@ def add_prompts_bulk(set_id: str, prompts: list[dict]) -> int:
             )
         conn.executemany(
             """
-            INSERT INTO playground_prompts (id, set_id, prompt, reference_answer, tags_json, order_idx, created_at)
+            INSERT INTO battleground_prompts (id, set_id, prompt, reference_answer, tags_json, order_idx, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
@@ -1043,7 +1184,7 @@ def list_prompts(set_id: str) -> list[dict]:
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT * FROM playground_prompts WHERE set_id = ? ORDER BY order_idx, created_at",
+            "SELECT * FROM battleground_prompts WHERE set_id = ? ORDER BY order_idx, created_at",
             (set_id,),
         ).fetchall()
         out = []
@@ -1059,7 +1200,7 @@ def list_prompts(set_id: str) -> list[dict]:
 def delete_prompt(prompt_id: str) -> bool:
     conn = get_connection()
     try:
-        cursor = conn.execute("DELETE FROM playground_prompts WHERE id = ?", (prompt_id,))
+        cursor = conn.execute("DELETE FROM battleground_prompts WHERE id = ?", (prompt_id,))
         conn.commit()
         return cursor.rowcount > 0
     finally:
@@ -1069,7 +1210,7 @@ def delete_prompt(prompt_id: str) -> bool:
 def get_prompt(prompt_id: str) -> Optional[dict]:
     conn = get_connection()
     try:
-        row = conn.execute("SELECT * FROM playground_prompts WHERE id = ?", (prompt_id,)).fetchone()
+        row = conn.execute("SELECT * FROM battleground_prompts WHERE id = ?", (prompt_id,)).fetchone()
         if row is None:
             return None
         data = dict(row)
@@ -1079,19 +1220,55 @@ def get_prompt(prompt_id: str) -> Optional[dict]:
         conn.close()
 
 
+def update_prompt(
+    prompt_id: str,
+    prompt: Optional[str] = None,
+    reference_answer: object = _UNSET,
+) -> Optional[dict]:
+    """Partial update of one prompt row.
+
+    ``None`` clears a field; the ``_UNSET`` sentinel leaves it unchanged.
+    """
+    conn = get_connection()
+    try:
+        assignments = []
+        params: list = []
+        if prompt is not None:
+            assignments.append("prompt = ?")
+            params.append(prompt)
+        if reference_answer is not _UNSET:
+            assignments.append("reference_answer = ?")
+            params.append(reference_answer)  # type: ignore[arg-type]
+        if not assignments:
+            return get_prompt(prompt_id)
+        params.append(prompt_id)
+        cursor = conn.execute(
+            f"UPDATE battleground_prompts SET {', '.join(assignments)} WHERE id = ?",
+            params,
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            return None
+    finally:
+        conn.close()
+    return get_prompt(prompt_id)
+
+
 # ---------------------------------------------------------------------------
 # Judge runs
 # ---------------------------------------------------------------------------
 
 
 def create_judge_run(
-    test_id: str,
     prompt_set_id: str,
     judge_source_id: str,
     mode: str,
     config: Optional[dict] = None,
+    test_id: Optional[str] = None,
     run_id: Optional[str] = None,
 ) -> dict:
+    """Create a judge run. ``test_id`` is legacy (A/B-test-scoped) runs only;
+    standalone auto-eval runs carry their participants in ``config.source_ids``."""
     if mode not in {"pairwise", "rubric"}:
         raise ValueError(f"Unknown judge mode: {mode}")
     now = _now()
@@ -1100,7 +1277,7 @@ def create_judge_run(
     try:
         conn.execute(
             """
-            INSERT INTO playground_judge_runs (
+            INSERT INTO battleground_judge_runs (
                 id, test_id, prompt_set_id, judge_source_id, mode, status,
                 config_json, progress_done, progress_total, created_at
             ) VALUES (?, ?, ?, ?, ?, 'queued', ?, 0, 0, ?)
@@ -1147,7 +1324,7 @@ def update_judge_run(
     conn = get_connection()
     try:
         cursor = conn.execute(
-            f"UPDATE playground_judge_runs SET {', '.join(updates)} WHERE id = ?",
+            f"UPDATE battleground_judge_runs SET {', '.join(updates)} WHERE id = ?",
             params + [run_id],
         )
         conn.commit()
@@ -1161,7 +1338,7 @@ def update_judge_run(
 def get_judge_run(run_id: str) -> Optional[dict]:
     conn = get_connection()
     try:
-        row = conn.execute("SELECT * FROM playground_judge_runs WHERE id = ?", (run_id,)).fetchone()
+        row = conn.execute("SELECT * FROM battleground_judge_runs WHERE id = ?", (run_id,)).fetchone()
         if row is None:
             return None
         data = dict(row)
@@ -1176,12 +1353,12 @@ def list_judge_runs(test_id: Optional[str] = None, limit: int = 50) -> list[dict
     try:
         if test_id is not None:
             rows = conn.execute(
-                "SELECT * FROM playground_judge_runs WHERE test_id = ? ORDER BY created_at DESC LIMIT ?",
+                "SELECT * FROM battleground_judge_runs WHERE test_id = ? ORDER BY created_at DESC LIMIT ?",
                 (test_id, limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM playground_judge_runs ORDER BY created_at DESC LIMIT ?",
+                "SELECT * FROM battleground_judge_runs ORDER BY created_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()
         out = []
@@ -1215,7 +1392,7 @@ def create_judge_result(
     try:
         conn.execute(
             """
-            INSERT INTO playground_judge_results (
+            INSERT INTO battleground_judge_results (
                 id, run_id, prompt_id, turn_id, response_a_id, response_b_id,
                 source_a, source_b, winner, reason, confidence, rubric_scores_json,
                 judge_meta_json, created_at
@@ -1248,7 +1425,7 @@ def list_judge_results(run_id: str) -> list[dict]:
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT * FROM playground_judge_results WHERE run_id = ? ORDER BY created_at",
+            "SELECT * FROM battleground_judge_results WHERE run_id = ? ORDER BY created_at",
             (run_id,),
         ).fetchall()
         out = []

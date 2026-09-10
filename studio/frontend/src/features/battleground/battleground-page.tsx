@@ -1,35 +1,37 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import { useT } from "@/i18n";
+import { cn } from "@/lib/utils";
 import {
-  AiChat02Icon,
-  Chart02Icon,
-  Comment01Icon,
+  BalanceScaleIcon,
   Medal01Icon,
   ServerStack01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useState } from "react";
-import { useT } from "@/i18n";
-import { cn } from "@/lib/utils";
+import { AutoEvalPanel } from "./auto-eval-panel";
 import { ModelsPanel } from "./models-panel";
-import { PlayPanel } from "./play-panel";
-import { EvaluatePanel } from "./evaluate-panel";
 import { TestsPanel } from "./tests-panel";
-import { ReportsPanel } from "./reports-panel";
 
-export type PlaygroundTab = "models" | "play" | "evaluate" | "tests" | "reports";
+export type BattlegroundTab = "sources" | "ab" | "auto";
 
-export function PlaygroundPage() {
+export function BattlegroundPage() {
   const t = useT();
-  const [tab, setTab] = useState<PlaygroundTab>("models");
+  const [tab, setTab] = useState<BattlegroundTab>("sources");
 
-  const tabs: { id: PlaygroundTab; label: string; icon: typeof Medal01Icon }[] = [
-    { id: "models", label: t("playground.tabModels"), icon: ServerStack01Icon },
-    { id: "play", label: t("playground.tabPlay"), icon: AiChat02Icon },
-    { id: "evaluate", label: t("playground.tabEvaluate"), icon: Medal01Icon },
-    { id: "tests", label: t("playground.tabTests"), icon: Comment01Icon },
-    { id: "reports", label: t("playground.tabReports"), icon: Chart02Icon },
+  const tabs: {
+    id: BattlegroundTab;
+    label: string;
+    icon: typeof Medal01Icon;
+  }[] = [
+    {
+      id: "sources",
+      label: t("battleground.tabSources"),
+      icon: ServerStack01Icon,
+    },
+    { id: "ab", label: t("battleground.tabAbTests"), icon: BalanceScaleIcon },
+    { id: "auto", label: t("battleground.tabAutoEval"), icon: Medal01Icon },
   ];
 
   return (
@@ -37,10 +39,10 @@ export function PlaygroundPage() {
       <header className="flex flex-col gap-3 border-b px-4 pt-4 pb-3 sm:px-6">
         <div className="flex items-center gap-2">
           <h1 className="font-heading font-semibold text-xl tracking-tight">
-            {t("playground.title")}
+            {t("battleground.title")}
           </h1>
           <span className="text-muted-foreground text-sm">
-            {t("playground.subtitle")}
+            {t("battleground.subtitle")}
           </span>
         </div>
         <nav className="flex flex-wrap items-center gap-1" role="tablist">
@@ -65,11 +67,9 @@ export function PlaygroundPage() {
         </nav>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {tab === "models" && <ModelsPanel />}
-        {tab === "play" && <PlayPanel />}
-        {tab === "evaluate" && <EvaluatePanel />}
-        {tab === "tests" && <TestsPanel />}
-        {tab === "reports" && <ReportsPanel />}
+        {tab === "sources" && <ModelsPanel />}
+        {tab === "ab" && <TestsPanel />}
+        {tab === "auto" && <AutoEvalPanel />}
       </div>
     </div>
   );

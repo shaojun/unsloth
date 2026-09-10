@@ -99,11 +99,15 @@ test("a customized version-5 sidebar keeps its order and only gains Audio", () =
     migrateShippedSidebarNavDefault(customization, 5, 7),
     customization,
   );
+  // The stored layout gains every id shipped after it (Audio, then the
+  // Battleground row), appended by sanitizeSidebarNav.
   assert.deepEqual(
     customization.sidebarNav.map((item) => item.id),
-    [...customizedV5.map((item) => item.id), "audio"],
+    [...customizedV5.map((item) => item.id), "audio", "battleground"],
   );
-  assert.equal(customization.sidebarNav.at(-1)?.pinned, false);
+  // The last appended row (Audio) is unpinned; the Battleground row after it
+  // carries its own default (pinned).
+  assert.equal(customization.sidebarNav.at(-2)?.pinned, false);
 });
 
 test("a user-arranged sidebar survives the migration", () => {
@@ -121,11 +125,22 @@ test("a user-arranged sidebar survives the migration", () => {
 test("an install sitting on the version-6 default picks Video up", () => {
   // The layout this change replaces. Untouched, so it adopts the new default
   // rather than being read as a deliberate choice to keep Video under More.
-  const customization = sanitizeCustomization({ sidebarNav: shippedLayouts[4] });
+  const customization = sanitizeCustomization({
+    sidebarNav: shippedLayouts[4],
+  });
   const migrated = migrateShippedSidebarNavDefault(customization, 6, 7);
   assert.deepEqual(migrated.sidebarNav, DEFAULT_CUSTOMIZATION.sidebarNav);
-  const ids = migrated.sidebarNav.filter((item) => item.pinned).map((i) => i.id);
-  assert.deepEqual(ids, ["hub", "projects", "images", "video", "train"]);
+  const ids = migrated.sidebarNav
+    .filter((item) => item.pinned)
+    .map((i) => i.id);
+  assert.deepEqual(ids, [
+    "hub",
+    "projects",
+    "images",
+    "video",
+    "train",
+    "battleground",
+  ]);
 });
 
 test("a shipped-looking layout chosen after migration is preserved", () => {

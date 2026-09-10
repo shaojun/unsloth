@@ -162,6 +162,7 @@ FRONTEND_SHIPPED_SIDEBAR_NAV = [
     ("train", True),
     ("recipes", False),
     ("export", False),
+    ("battleground", True),
     ("api", False),
 ]
 
@@ -202,6 +203,7 @@ def test_customization_sidebar_nav_preserves_order_and_normalizes():
         ("train", True),
         ("recipes", False),
         ("export", False),
+        ("battleground", True),
         ("api", False),
     ]
 
@@ -471,6 +473,7 @@ def test_personalization_route_roundtrip_real_shape(monkeypatch):
                     {"id": "projects", "pinned": False},
                     {"id": "recipes", "pinned": False},
                     {"id": "export", "pinned": False},
+                    {"id": "battleground", "pinned": True},
                     {"id": "api", "pinned": False},
                 ],
             },

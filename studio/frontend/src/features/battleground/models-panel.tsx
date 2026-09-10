@@ -1,13 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-import { Add01Icon, Copy01Icon, Delete02Icon, RefreshIcon } from "@hugeicons/core-free-icons";
-import { HugeiconsIcon } from "@hugeicons/react";
-import { useCallback, useEffect, useState } from "react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
@@ -15,28 +9,47 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { useT } from "@/i18n";
 import { copyToClipboard } from "@/lib/copy-to-clipboard";
 import {
-  type PlaygroundSource,
-  type PlaygroundTrainedModel,
-  playgroundApi,
-} from "./api/playground-api";
+  Add01Icon,
+  Copy01Icon,
+  Delete02Icon,
+  PencilEdit02Icon,
+  PlayIcon,
+  RefreshIcon,
+} from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
+import {
+  type BattlegroundSource,
+  type BattlegroundTrainedModel,
+  battlegroundApi,
+} from "./api/battleground-api";
+import { PlayChatDialog } from "./play-chat-dialog";
 
 /** Default port the hosting hints suggest for a manually started vLLM server. */
 const VLLM_HINT_PORT = 8000;
 
 export function ModelsPanel() {
   const t = useT();
-  const [sources, setSources] = useState<PlaygroundSource[]>([]);
-  const [trainedModels, setTrainedModels] = useState<PlaygroundTrainedModel[]>([]);
+  const [sources, setSources] = useState<BattlegroundSource[]>([]);
+  const [trainedModels, setTrainedModels] = useState<
+    BattlegroundTrainedModel[]
+  >([]);
   const [addOpen, setAddOpen] = useState(false);
+  const [playingSource, setPlayingSource] = useState<BattlegroundSource | null>(
+    null,
+  );
 
   const refresh = useCallback(async () => {
     try {
       const [src, trained] = await Promise.all([
-        playgroundApi.listSources(),
-        playgroundApi.trainedModels(),
+        battlegroundApi.listSources(),
+        battlegroundApi.trainedModels(),
       ]);
       setSources(src);
       setTrainedModels(trained.models);
@@ -56,30 +69,48 @@ export function ModelsPanel() {
 
       <section className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
-          <h2 className="font-heading font-semibold text-lg">{t("playground.sources")}</h2>
+          <h2 className="font-heading font-semibold text-lg">
+            {t("battleground.sources")}
+          </h2>
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={() => void refresh()}>
               <HugeiconsIcon icon={RefreshIcon} className="size-4" />
             </Button>
             <Button size="sm" onClick={() => setAddOpen(true)}>
               <HugeiconsIcon icon={Add01Icon} className="size-4" />
-              {t("playground.addSource")}
+              {t("battleground.addSource")}
             </Button>
           </div>
         </div>
         {sources.length === 0 && (
           <p className="text-muted-foreground rounded-lg border border-dashed p-6 text-center text-sm">
-            {t("playground.noSources")}
+            {t("battleground.noSources")}
           </p>
         )}
         <div className="flex flex-col gap-2">
           {sources.map((source) => (
-            <SourceCard key={source.id} source={source} onChanged={refresh} />
+            <SourceCard
+              key={source.id}
+              source={source}
+              onChanged={refresh}
+              onPlay={() => setPlayingSource(source)}
+            />
           ))}
         </div>
       </section>
 
-      <AddSourceDialog open={addOpen} onOpenChange={setAddOpen} onCreated={refresh} />
+      <AddSourceDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        onCreated={refresh}
+      />
+      <PlayChatDialog
+        source={playingSource}
+        open={playingSource != null}
+        onOpenChange={(open) => {
+          if (!open) setPlayingSource(null);
+        }}
+      />
     </div>
   );
 }
@@ -90,26 +121,28 @@ export function ModelsPanel() {
  * model's full output path is the key info) into a terminal on this machine,
  * then register the resulting endpoint as a source below.
  */
-function HostingHintSection({ models }: { models: PlaygroundTrainedModel[] }) {
+function HostingHintSection({
+  models,
+}: { models: BattlegroundTrainedModel[] }) {
   const t = useT();
 
   return (
     <section className="flex flex-col gap-3">
       <h2 className="font-heading font-semibold text-lg">
-        {t("playground.hostManuallyTitle")}
+        {t("battleground.hostManuallyTitle")}
       </h2>
       <p className="text-muted-foreground text-sm">
-        {t("playground.hostManuallyIntro")}
+        {t("battleground.hostManuallyIntro")}
       </p>
       <ol className="text-muted-foreground flex list-decimal flex-col gap-1 pl-5 text-sm">
-        <li>{t("playground.hostManuallyStep1")}</li>
-        <li>{t("playground.hostManuallyStep2")}</li>
-        <li>{t("playground.hostManuallyStep3")}</li>
+        <li>{t("battleground.hostManuallyStep1")}</li>
+        <li>{t("battleground.hostManuallyStep2")}</li>
+        <li>{t("battleground.hostManuallyStep3")}</li>
       </ol>
 
       {models.length === 0 ? (
         <p className="text-muted-foreground rounded-lg border border-dashed p-6 text-center text-sm">
-          {t("playground.noTrainedModels")}
+          {t("battleground.noTrainedModels")}
         </p>
       ) : (
         <div className="flex flex-col gap-2">
@@ -122,20 +155,26 @@ function HostingHintSection({ models }: { models: PlaygroundTrainedModel[] }) {
   );
 }
 
-function TrainedModelRow({ model }: { model: PlaygroundTrainedModel }) {
+function TrainedModelRow({ model }: { model: BattlegroundTrainedModel }) {
   const t = useT();
   const command = `vllm serve "${model.output_dir}" --port ${VLLM_HINT_PORT}`;
 
   return (
     <div className="flex flex-col gap-2 rounded-lg border p-3">
       <div className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-sm font-medium">{model.name}</span>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium">
+          {model.name}
+        </span>
         {model.model_name && model.model_name !== model.name && (
-          <span className="text-muted-foreground truncate text-xs">{model.model_name}</span>
+          <span className="text-muted-foreground truncate text-xs">
+            {model.model_name}
+          </span>
         )}
       </div>
       {model.artifact === "adapter" && (
-        <p className="text-xs text-amber-500">{t("playground.adapterNote")}</p>
+        <p className="text-xs text-amber-500">
+          {t("battleground.adapterNote")}
+        </p>
       )}
       <div className="bg-muted/40 flex items-center gap-2 rounded-md border p-1.5">
         <code className="min-w-0 flex-1 overflow-x-auto font-mono text-xs whitespace-nowrap">
@@ -147,11 +186,11 @@ function TrainedModelRow({ model }: { model: PlaygroundTrainedModel }) {
           className="h-7 shrink-0"
           onClick={() => {
             void copyToClipboard(command);
-            toast.success(t("playground.commandCopied"));
+            toast.success(t("battleground.commandCopied"));
           }}
         >
           <HugeiconsIcon icon={Copy01Icon} className="size-3.5" />
-          {t("playground.copyCommand")}
+          {t("battleground.copyCommand")}
         </Button>
       </div>
     </div>
@@ -161,23 +200,26 @@ function TrainedModelRow({ model }: { model: PlaygroundTrainedModel }) {
 function SourceCard({
   source,
   onChanged,
+  onPlay,
 }: {
-  source: PlaygroundSource;
+  source: BattlegroundSource;
   onChanged: () => void;
+  onPlay: () => void;
 }) {
   const t = useT();
   const [testing, setTesting] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
 
   const handleTest = async () => {
     setTesting(true);
     try {
-      const result = await playgroundApi.testSource(source.id);
+      const result = await battlegroundApi.testSource(source.id);
       if (result.ok) {
         toast.success(
-          t("playground.connectionOk", { count: result.models.length }),
+          t("battleground.connectionOk", { count: result.models.length }),
         );
       } else {
-        toast.error(result.error || t("playground.connectionFailed"));
+        toast.error(result.error || t("battleground.connectionFailed"));
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
@@ -188,8 +230,8 @@ function SourceCard({
 
   const handleDelete = async () => {
     try {
-      await playgroundApi.deleteSource(source.id);
-      toast.success(t("playground.sourceDeleted"));
+      await battlegroundApi.deleteSource(source.id);
+      toast.success(t("battleground.sourceDeleted"));
       onChanged();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
@@ -206,12 +248,88 @@ function SourceCard({
         </p>
       </div>
       <div className="flex items-center gap-1.5">
-        <Button variant="outline" size="sm" disabled={testing} onClick={() => void handleTest()}>
-          {t("playground.test")}
+        <Button variant="outline" size="sm" onClick={onPlay}>
+          <HugeiconsIcon icon={PlayIcon} className="size-3.5" />
+          {t("battleground.play")}
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+          <HugeiconsIcon icon={PencilEdit02Icon} className="size-3.5" />
+          {t("battleground.edit")}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={testing}
+          onClick={() => void handleTest()}
+        >
+          {t("battleground.test")}
         </Button>
         <Button variant="ghost" size="sm" onClick={() => void handleDelete()}>
           <HugeiconsIcon icon={Delete02Icon} className="size-3.5" />
         </Button>
+      </div>
+      <EditSourceDialog
+        source={source}
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        onSaved={onChanged}
+      />
+    </div>
+  );
+}
+
+/** Shared form for creating and editing a source. */
+function SourceFields({
+  name,
+  setName,
+  refValue,
+  setRef,
+  model,
+  setModel,
+  apiKey,
+  setApiKey,
+}: {
+  name: string;
+  setName: (value: string) => void;
+  refValue: string;
+  setRef: (value: string) => void;
+  model: string;
+  setModel: (value: string) => void;
+  apiKey: string;
+  setApiKey: (value: string) => void;
+}) {
+  const t = useT();
+  return (
+    <div className="flex flex-col gap-4">
+      <p className="text-muted-foreground text-sm">
+        {t("battleground.endpointHint")}
+      </p>
+      <div className="flex flex-col gap-1.5">
+        <Label>{t("battleground.sourceName")}</Label>
+        <Input value={name} onChange={(event) => setName(event.target.value)} />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Label>{t("battleground.baseUrl")}</Label>
+        <Input
+          value={refValue}
+          placeholder={`http://localhost:${VLLM_HINT_PORT}/v1`}
+          onChange={(event) => setRef(event.target.value)}
+        />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Label>{t("battleground.modelId")}</Label>
+        <Input
+          value={model}
+          onChange={(event) => setModel(event.target.value)}
+        />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Label>{t("battleground.apiKeyOptional")}</Label>
+        <Input
+          type="password"
+          value={apiKey}
+          onChange={(event) => setApiKey(event.target.value)}
+        />
       </div>
     </div>
   );
@@ -236,14 +354,14 @@ function AddSourceDialog({
   const handleSave = async () => {
     setSaving(true);
     try {
-      await playgroundApi.createSource({
+      await battlegroundApi.createSource({
         kind: "external_openai",
         name,
         ref,
         external_model: model || null,
         api_key: apiKey || null,
       });
-      toast.success(t("playground.sourceAdded"));
+      toast.success(t("battleground.sourceAdded"));
       onOpenChange(false);
       setName("");
       setRef("");
@@ -261,41 +379,96 @@ function AddSourceDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{t("playground.addSource")}</DialogTitle>
+          <DialogTitle>{t("battleground.addSource")}</DialogTitle>
         </DialogHeader>
-        <div className="flex flex-col gap-4">
-          <p className="text-muted-foreground text-sm">{t("playground.endpointHint")}</p>
-          <div className="flex flex-col gap-1.5">
-            <Label>{t("playground.sourceName")}</Label>
-            <Input value={name} onChange={(event) => setName(event.target.value)} />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label>{t("playground.baseUrl")}</Label>
-            <Input
-              value={ref}
-              placeholder={`http://localhost:${VLLM_HINT_PORT}/v1`}
-              onChange={(event) => setRef(event.target.value)}
-            />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label>{t("playground.modelId")}</Label>
-            <Input value={model} onChange={(event) => setModel(event.target.value)} />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label>{t("playground.apiKeyOptional")}</Label>
-            <Input
-              type="password"
-              value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-            />
-          </div>
-        </div>
+        <SourceFields
+          name={name}
+          setName={setName}
+          refValue={ref}
+          setRef={setRef}
+          model={model}
+          setModel={setModel}
+          apiKey={apiKey}
+          setApiKey={setApiKey}
+        />
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            {t("playground.cancel")}
+            {t("battleground.cancel")}
           </Button>
-          <Button disabled={!name.trim() || !ref.trim() || saving} onClick={() => void handleSave()}>
-            {t("playground.save")}
+          <Button
+            disabled={!name.trim() || !ref.trim() || saving}
+            onClick={() => void handleSave()}
+          >
+            {t("battleground.save")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditSourceDialog({
+  source,
+  open,
+  onOpenChange,
+  onSaved,
+}: {
+  source: BattlegroundSource;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSaved: () => void;
+}) {
+  const t = useT();
+  const [name, setName] = useState(source.name);
+  const [ref, setRef] = useState(source.ref);
+  const [model, setModel] = useState(source.external_model ?? "");
+  const [apiKey, setApiKey] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await battlegroundApi.updateSource(source.id, {
+        name,
+        ref,
+        external_model: model || null,
+        ...(apiKey ? { api_key: apiKey } : {}),
+      });
+      toast.success(t("battleground.sourceUpdated"));
+      onOpenChange(false);
+      onSaved();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{t("battleground.editSource")}</DialogTitle>
+        </DialogHeader>
+        <SourceFields
+          name={name}
+          setName={setName}
+          refValue={ref}
+          setRef={setRef}
+          model={model}
+          setModel={setModel}
+          apiKey={apiKey}
+          setApiKey={setApiKey}
+        />
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            {t("battleground.cancel")}
+          </Button>
+          <Button
+            disabled={!name.trim() || !ref.trim() || saving}
+            onClick={() => void handleSave()}
+          >
+            {t("battleground.save")}
           </Button>
         </DialogFooter>
       </DialogContent>

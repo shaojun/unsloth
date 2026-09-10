@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Playground package: source proxying and LLM-as-judge evaluation."""
+"""Battleground package: source proxying and LLM-as-judge evaluation."""
 
-from core.playground.proxy import (
-    PlaygroundProxyError,
+from core.battleground.proxy import (
+    BattlegroundProxyError,
     SourceDownError,
     chat_completion,
     chat_completion_aggregate,
@@ -13,7 +13,7 @@ from core.playground.proxy import (
 )
 
 __all__ = [
-    "PlaygroundProxyError",
+    "BattlegroundProxyError",
     "SourceDownError",
     "chat_completion",
     "chat_completion_aggregate",

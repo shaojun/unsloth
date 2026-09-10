@@ -320,9 +320,9 @@ from routes.llama import router as llama_router
 from routes.llama_compat import is_engine_probe_path, router as llama_compat_router
 from routes.whisper import router as whisper_router
 from routes.preview import router as preview_router
-from routes.playground import (
-    public_router as playground_public_router,
-    router as playground_router,
+from routes.battleground import (
+    public_router as battleground_public_router,
+    router as battleground_router,
 )
 from hub.routes import (
     inventory_router as hub_inventory_router,
@@ -1493,9 +1493,9 @@ app.include_router(inference_router, prefix = "/v1", tags = ["openai-compat"])
 # resolving to index.html with a 200.
 app.include_router(llama_compat_router, tags = ["openai-compat"])
 app.include_router(preview_router, prefix = "/p", tags = ["preview"])
-# Model Playground: Studio API + public tester pages (signed links, like /p).
-app.include_router(playground_router, prefix = "/api/playground", tags = ["playground"])
-app.include_router(playground_public_router, prefix = "/pg", tags = ["playground"])
+# Model Battleground: Studio API + public tester pages (signed links, like /p).
+app.include_router(battleground_router, prefix = "/api/battleground", tags = ["battleground"])
+app.include_router(battleground_public_router, prefix = "/bg", tags = ["battleground"])
 app.include_router(providers_router, prefix = "/api/providers", tags = ["providers"])
 
 app.include_router(openai_codex_auth_router, prefix = "/api/providers", tags = ["providers"])

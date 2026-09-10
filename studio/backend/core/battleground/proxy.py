@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Chat-completion proxying for Model Playground sources.
+"""Chat-completion proxying for Model Battleground sources.
 
-A playground *source* is an OpenAI-compatible endpoint (base URL + optional
+A battleground *source* is an OpenAI-compatible endpoint (base URL + optional
 API key + model id) — typically a ``vllm serve`` instance the user started
 themselves on this machine. Proxied server-side so tester browsers never see
 the key.
@@ -29,21 +29,23 @@ from storage.credential_secrets import get_secret
 
 logger = get_logger(__name__)
 
-PLAYGROUND_API_KEY_KIND = "playground_api_key"
+# Stored value predates the playground → battleground rename; the credential
+# AAD binds the kind string, so renaming it would orphan existing API keys.
+BATTLEGROUND_API_KEY_KIND = "playground_api_key"
 
 _PROXY_TIMEOUT_S = 300.0
 _CONNECT_TIMEOUT_S = 15.0
 
 
-class PlaygroundProxyError(RuntimeError):
-    """Base error for playground proxy failures."""
+class BattlegroundProxyError(RuntimeError):
+    """Base error for battleground proxy failures."""
 
 
-class SourceDownError(PlaygroundProxyError):
+class SourceDownError(BattlegroundProxyError):
     """The source endpoint refused the connection or returned 5xx."""
 
 
-class SourceNotReadyError(PlaygroundProxyError):
+class SourceNotReadyError(BattlegroundProxyError):
     """The source cannot be called right now."""
 
 
@@ -62,7 +64,7 @@ def resolve_source_api_key(source: dict) -> Optional[str]:
     """Fetch the stored API key for a source, if any."""
     if not source.get("api_key_set"):
         return None
-    return get_secret(PLAYGROUND_API_KEY_KIND, source["id"])
+    return get_secret(BATTLEGROUND_API_KEY_KIND, source["id"])
 
 
 def resolve_source_target(source: dict) -> ProxyTarget:
@@ -82,7 +84,7 @@ def resolve_source_target(source: dict) -> ProxyTarget:
         )
     base_url = (source.get("ref") or "").rstrip("/")
     if not base_url:
-        raise PlaygroundProxyError(f"Source '{source['name']}' has no base URL")
+        raise BattlegroundProxyError(f"Source '{source['name']}' has no base URL")
     return ProxyTarget(
         base_url = base_url,
         model = source.get("external_model") or "",
@@ -160,7 +162,7 @@ async def _open_request(
         await client.aclose()
         if response.status_code >= 500:
             raise SourceDownError(f"Source error {response.status_code}: {body}")
-        raise PlaygroundProxyError(f"Source rejected request ({response.status_code}): {body}")
+        raise BattlegroundProxyError(f"Source rejected request ({response.status_code}): {body}")
     return _OpenStream(client = client, response = response)
 
 
@@ -243,7 +245,7 @@ async def _consume_json(opened: _OpenStream) -> CompletionResult:
         body = await opened.response.aread()
         data = json.loads(body)
     except (json.JSONDecodeError, httpx.HTTPError) as exc:
-        raise PlaygroundProxyError(f"Invalid response from source: {exc}") from exc
+        raise BattlegroundProxyError(f"Invalid response from source: {exc}") from exc
     finally:
         await opened.close()
     result = CompletionResult(latency_ms = round((time.perf_counter() - started) * 1000, 1))
@@ -292,7 +294,7 @@ async def stream_chat_completion(
 
     ``delta`` events carry ``text`` (or ``reasoning``); ``done`` carries the
     final CompletionResult fields. Errors raise SourceDownError /
-    PlaygroundProxyError.
+    BattlegroundProxyError.
     """
     opened = await _open_request(target, messages, params or {}, stream = True)
     started = time.perf_counter()
