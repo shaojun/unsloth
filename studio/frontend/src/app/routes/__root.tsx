@@ -278,9 +278,6 @@ const CHAT_ONLY_ALLOWED = new Set([
   // judge, blind tests and reports never touch the local GPU (hosting a local
   // model simply reports "vLLM not installed" on such a host).
   "/battleground",
-  // Playground works chat-only too: external OpenAI-compatible sources, the
-  // judge, blind tests and reports never touch the local GPU (hosting a local
-  // model simply reports "vLLM not installed" on such a host).
   "/playground",
 ]);
 

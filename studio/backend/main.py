@@ -1684,7 +1684,7 @@ app.include_router(preview_router, prefix = "/p", tags = ["preview"])
 # Model Battleground: Studio API + public tester pages (signed links, like /p).
 app.include_router(battleground_router, prefix = "/api/battleground", tags = ["battleground"])
 app.include_router(battleground_public_router, prefix = "/bg", tags = ["battleground"])
-# Model Playground: Studio API + public tester pages (signed links, like /p).
+# Model Playground has its own API and public tester links.
 app.include_router(playground_router, prefix = "/api/playground", tags = ["playground"])
 app.include_router(playground_public_router, prefix = "/pg", tags = ["playground"])
 app.include_router(providers_router, prefix = "/api/providers", tags = ["providers"])

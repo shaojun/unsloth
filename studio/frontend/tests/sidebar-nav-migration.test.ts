@@ -42,30 +42,6 @@ const shippedLayouts: SidebarNavItemPref[][] = [
   ],
   [
     { id: "hub", pinned: true },
-  [
-    { id: "hub", pinned: true },
-    { id: "projects", pinned: true },
-    { id: "images", pinned: true },
-    { id: "video", pinned: false },
-    { id: "audio", pinned: false },
-    { id: "train", pinned: true },
-    { id: "recipes", pinned: false },
-    { id: "export", pinned: false },
-    { id: "battleground", pinned: true },
-    { id: "api", pinned: false },
-  ],
-  [
-    { id: "hub", pinned: true },
-    { id: "projects", pinned: true },
-    { id: "library", pinned: true },
-    { id: "images", pinned: true },
-    { id: "video", pinned: false },
-    { id: "audio", pinned: false },
-    { id: "train", pinned: true },
-    { id: "recipes", pinned: false },
-    { id: "export", pinned: false },
-    { id: "api", pinned: false },
-  ],
     { id: "projects", pinned: true },
     { id: "images", pinned: true },
     { id: "video", pinned: false },
@@ -96,13 +72,77 @@ const shippedLayouts: SidebarNavItemPref[][] = [
     { id: "export", pinned: false },
     { id: "api", pinned: false },
   ],
+  [
+    { id: "hub", pinned: true },
+    { id: "projects", pinned: true },
+    { id: "images", pinned: true },
+    { id: "video", pinned: false },
+    { id: "audio", pinned: false },
+    { id: "train", pinned: true },
+    { id: "recipes", pinned: false },
+    { id: "export", pinned: false },
+    { id: "battleground", pinned: true },
+    { id: "api", pinned: false },
+  ],
+  [
+    { id: "hub", pinned: true },
+    { id: "projects", pinned: true },
+    { id: "library", pinned: true },
+    { id: "images", pinned: true },
+    { id: "video", pinned: false },
+    { id: "audio", pinned: false },
+    { id: "train", pinned: true },
+    { id: "recipes", pinned: false },
+    { id: "export", pinned: false },
+    { id: "api", pinned: false },
+  ],
+  [
+    { id: "hub", pinned: true },
+    { id: "projects", pinned: true },
+    { id: "library", pinned: true },
+    { id: "images", pinned: true },
+    { id: "video", pinned: false },
+    { id: "audio", pinned: false },
+    { id: "train", pinned: true },
+    { id: "recipes", pinned: false },
+    { id: "export", pinned: false },
+    { id: "battleground", pinned: true },
+    { id: "api", pinned: false },
+  ],
+  [
+    { id: "hub", pinned: true },
+    { id: "projects", pinned: true },
+    { id: "library", pinned: true },
+    { id: "images", pinned: true },
+    { id: "video", pinned: false },
+    { id: "audio", pinned: false },
+    { id: "train", pinned: true },
+    { id: "recipes", pinned: false },
+    { id: "export", pinned: false },
+    { id: "battleground", pinned: true },
+    { id: "playground", pinned: true },
+    { id: "api", pinned: false },
+  ],
+  [
+    { id: "hub", pinned: true },
+    { id: "projects", pinned: true },
+    { id: "library", pinned: true },
+    { id: "images", pinned: true },
+    { id: "video", pinned: false },
+    { id: "audio", pinned: false },
+    { id: "train", pinned: true },
+    { id: "recipes", pinned: false },
+    { id: "export", pinned: false },
+    { id: "battleground", pinned: true },
+    { id: "api", pinned: false },
+  ],
 ];
 
 test("every previously shipped sidebar adopts the current default", () => {
   for (const sidebarNav of shippedLayouts) {
     const customization = sanitizeCustomization({ sidebarNav });
     assert.deepEqual(
-      migrateShippedSidebarNavDefault(customization, 4, 9).sidebarNav,
+      migrateShippedSidebarNavDefault(customization, 4, 10).sidebarNav,
       DEFAULT_CUSTOMIZATION.sidebarNav,
     );
   }
@@ -113,7 +153,7 @@ test("the untouched pre-Audio version-5 sidebar adopts the Audio-aware default",
     sidebarNav: shippedLayouts[3],
   });
   assert.deepEqual(
-    migrateShippedSidebarNavDefault(customization, 5, 9).sidebarNav,
+    migrateShippedSidebarNavDefault(customization, 5, 10).sidebarNav,
     DEFAULT_CUSTOMIZATION.sidebarNav,
   );
 });
@@ -132,10 +172,10 @@ test("a customized version-5 sidebar keeps its order and only gains the rows add
   const customization = sanitizeCustomization({ sidebarNav: customizedV5 });
 
   assert.strictEqual(
-    migrateShippedSidebarNavDefault(customization, 5, 9),
+    migrateShippedSidebarNavDefault(customization, 5, 10),
     customization,
   );
-  // Rows added after this customized layout are appended in current ID order.
+  // The stored layout gains every id shipped after it, appended by sanitizeSidebarNav.
   assert.deepEqual(
     customization.sidebarNav.map((item) => item.id),
     [...customizedV5.map((item) => item.id), "library", "audio", "battleground", "playground"],
@@ -153,20 +193,16 @@ test("a user-arranged sidebar survives the migration", () => {
     ),
   });
   assert.strictEqual(
-    migrateShippedSidebarNavDefault(customization, 4, 9),
+    migrateShippedSidebarNavDefault(customization, 4, 10),
     customization,
   );
 });
 
-test("version-6 installs adopt the combined sidebar default", () => {
-  const customization = sanitizeCustomization({
-    sidebarNav: shippedLayouts[4],
-  });
-  const migrated = migrateShippedSidebarNavDefault(customization, 6, 9);
+test("an install sitting on the version-6 default adopts the current layout", () => {
+  const customization = sanitizeCustomization({ sidebarNav: shippedLayouts[4] });
+  const migrated = migrateShippedSidebarNavDefault(customization, 6, 10);
   assert.deepEqual(migrated.sidebarNav, DEFAULT_CUSTOMIZATION.sidebarNav);
-  const ids = migrated.sidebarNav
-    .filter((item) => item.pinned)
-    .map((i) => i.id);
+  const ids = migrated.sidebarNav.filter((item) => item.pinned).map((i) => i.id);
   assert.deepEqual(ids, [
     "hub",
     "projects",
@@ -178,21 +214,29 @@ test("version-6 installs adopt the combined sidebar default", () => {
   ]);
 });
 
-test("version-7 installs adopt the combined sidebar default", () => {
+test("an install sitting on the version-7 default adopts the current layout", () => {
   const customization = sanitizeCustomization({ sidebarNav: shippedLayouts[5] });
-  const migrated = migrateShippedSidebarNavDefault(customization, 7, 9);
+  const migrated = migrateShippedSidebarNavDefault(customization, 7, 10);
   assert.deepEqual(migrated.sidebarNav, DEFAULT_CUSTOMIZATION.sidebarNav);
   assert.equal(migrated.sidebarNav.find((item) => item.id === "video")?.pinned, false);
 });
 
 test("both version-8 sidebar variants adopt the combined default", () => {
-  for (const sidebarNav of shippedLayouts.slice(6)) {
+  for (const sidebarNav of shippedLayouts.slice(6, 8)) {
     const customization = sanitizeCustomization({ sidebarNav });
     assert.deepEqual(
-      migrateShippedSidebarNavDefault(customization, 8, 9).sidebarNav,
+      migrateShippedSidebarNavDefault(customization, 8, 10).sidebarNav,
       DEFAULT_CUSTOMIZATION.sidebarNav,
     );
   }
+});
+
+test("the version-9 Battleground layout adds Playground", () => {
+  const customization = sanitizeCustomization({ sidebarNav: shippedLayouts[9] });
+  assert.deepEqual(
+    migrateShippedSidebarNavDefault(customization, 9, 10).sidebarNav,
+    DEFAULT_CUSTOMIZATION.sidebarNav,
+  );
 });
 
 test("a shipped-looking layout chosen after migration is preserved", () => {
@@ -200,7 +244,7 @@ test("a shipped-looking layout chosen after migration is preserved", () => {
     sidebarNav: shippedLayouts[2],
   });
   assert.strictEqual(
-    migrateShippedSidebarNavDefault(customization, 9, 9),
+    migrateShippedSidebarNavDefault(customization, 10, 10),
     customization,
   );
 });
@@ -218,7 +262,7 @@ test("a synced profile picks the layout change up too", async () => {
   // only migrates locally is overwritten by the stored layout on every login.
   // PERSONALIZATION_VERSION has to move with the layout for that migration to
   // run against the remote record.
-  const stored = sanitizeCustomization({ sidebarNav: shippedLayouts[7] });
+  const stored = sanitizeCustomization({ sidebarNav: shippedLayouts[9] });
   const migrated = migrateShippedSidebarNavDefault(
     stored,
     4,

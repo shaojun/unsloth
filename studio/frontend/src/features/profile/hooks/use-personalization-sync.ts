@@ -35,8 +35,13 @@ import type { AvatarShape } from "../stores/user-profile-store";
 
 const PUSH_DEBOUNCE_MS = 800;
 
-// V1 stored the resolved locale; V2 stores the user's language preference.
-// V3-V7 migrate shipped sidebar layouts for synced profiles.
+// Version 2 payloads store the language preference ("auto" or a pinned
+// locale). Version 1 always serialized the resolved locale, so its "en" is
+// usually the old default rather than an explicit pick.
+// Version 3 migrates untouched sidebar layouts to keep Video under More.
+// Version 4 pins Video under Images. Without this bump a synced profile
+// rehydrates its stored layout over the local migration.
+// Version 5 updates the shipped Library/Video layout; version 6 adds Battleground.
 const PERSONALIZATION_VERSION = 7;
 
 type ProfileSnapshot = {

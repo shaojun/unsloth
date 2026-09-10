@@ -162,7 +162,7 @@ export const SIDEBAR_NAV_DEFAULT_PINNED: Record<SidebarNavItemId, boolean> = {
  *  user arranged themselves. v3 pinned Video under Images; v4 moved Model hub above Projects;
  *  v5 put Video back under "More" and later added API before Audio shipped; v6 added Audio;
  *  v7 pinned Video under Images; v8 shipped separate Library and Battleground layouts;
- *  v9 adds both rows; v10 adds Playground. */
+ *  v9 ships both rows; v10 adds Playground. */
 const SHIPPED_SIDEBAR_NAV_DEFAULTS: SidebarNavItemPref[][] = [
   [
     { id: "projects", pinned: true },
@@ -245,6 +245,19 @@ const SHIPPED_SIDEBAR_NAV_DEFAULTS: SidebarNavItemPref[][] = [
     { id: "train", pinned: true },
     { id: "recipes", pinned: false },
     { id: "export", pinned: false },
+    { id: "api", pinned: false },
+  ],
+  [
+    { id: "hub", pinned: true },
+    { id: "projects", pinned: true },
+    { id: "library", pinned: true },
+    { id: "images", pinned: true },
+    { id: "video", pinned: false },
+    { id: "audio", pinned: false },
+    { id: "train", pinned: true },
+    { id: "recipes", pinned: false },
+    { id: "export", pinned: false },
+    { id: "battleground", pinned: true },
     { id: "api", pinned: false },
   ],
   [
