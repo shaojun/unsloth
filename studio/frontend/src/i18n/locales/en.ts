@@ -1024,6 +1024,13 @@ export const en = {
         minimal: "Minimal",
       },
       custom: {
+        chatWidth: {
+          label: "Chat width",
+          description: "Set the width of messages and the composer. Full width uses the space between sidebars.",
+          standard: "Standard",
+          wide: "Wide",
+          full: "Full width",
+        },
         reset: "Reset",
         resetAll: "Reset customization",
         preferencesTitle: "Preferences",
