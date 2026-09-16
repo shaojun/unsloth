@@ -1433,7 +1433,9 @@ export const en = {
         "When off, use the same settings for every model.",
       autoCompactHint: "Uses the context length you set, not available VRAM.",
       pastedTextShortDescription:
-        "Turn pastes over this limit into .txt attachments.",
+        "Pastes of {count} characters or more become .txt attachments. Shorter pastes stay in the message box.",
+      pastedTextOffDescription:
+        "All pasted text stays in the message box, regardless of length.",
       compactionDescriptionInherit: "Follow the server's context policy.",
       compactionDescriptionCheckpoint:
         "Keep the latest turn and standing instructions.",
@@ -1517,7 +1519,7 @@ export const en = {
         title: "Web search",
         images: "Show images from web search",
         imagesDescription:
-          "Include image results. Unsloth downloads thumbnails without connecting your browser to image hosts.",
+          "Include images in search results.",
       },
       artifacts: {
         title: "Canvas",
