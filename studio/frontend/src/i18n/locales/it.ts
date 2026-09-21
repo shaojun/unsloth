@@ -1565,7 +1565,7 @@ export const it = {
           "Fissa le voci nel menu laterale «+» della chat. Le altre verranno spostate in «Altro».",
         chatWithFiles: "Chat con file (RAG)",
         mcp: "MCP",
-        skills: "Competenze degli agenti",
+        skills: "Competenze",
         savedPrompts: "Prompt salvati",
         compareChat: "Confronta chat",
         exportChat: "Esporta chat",
@@ -2905,7 +2905,7 @@ export const it = {
     tiesShort: " pari",
   },
   skills: {
-    title: "Competenze degli agenti",
+    title: "Competenze",
     description: "Le competenze vengono rilevate nelle cartelle standard degli agenti. Attivale qui, poi digita @ nella chat per menzionarne una.",
     precedence: "~/.agents/skills ha la precedenza rispetto a ~/.claude/skills.",
     refresh: "Aggiorna",
@@ -2920,6 +2920,6 @@ export const it = {
     enable: "Attiva {name}",
     disable: "Disattiva {name}",
     updateError: "Impossibile aggiornare la competenza",
-    mentions: "Competenze degli agenti",
+    mentions: "Competenze",
   },
 } as const;
