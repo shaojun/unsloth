@@ -224,13 +224,6 @@ export const fr = {
       moveUp: "Monter",
       moveDown: "Descendre",
     },
-    drag: {
-      reorder: "Réordonner",
-      pin: "Épingler",
-      unpin: "Désépingler",
-      moveTo: "Déplacer vers {name}",
-      moveToRecents: "Déplacer vers Récents",
-    },
     dialog: {
       deleteChat: {
         title: "Supprimer la discussion",
