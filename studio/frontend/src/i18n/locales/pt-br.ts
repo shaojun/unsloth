@@ -1149,7 +1149,7 @@ export const ptBR = {
       custom: {
         chatWidth: {
           label: "Largura do chat",
-          description: "Defina a largura das mensagens e do campo de texto. A largura total usa o espaço entre as barras laterais.",
+          description: "Largura das mensagens e do campo de texto.",
           standard: "Padrão",
           wide: "Ampla",
           full: "Largura total",
@@ -1220,7 +1220,6 @@ export const ptBR = {
         },
         contrast: {
           label: "Contraste",
-          description: "Intensidade das bordas e do texto secundário.",
         },
         reduceMotion: {
           label: "Reduzir movimento",
@@ -1250,7 +1249,7 @@ export const ptBR = {
       sidebarNav: {
         title: "Navegação da barra lateral",
         description:
-          "Fixe e reordene as abas da barra lateral. As abas não fixadas ficam no menu Mais; se só houver uma aba não fixada, ela é ocultada em vez de virar um menu de um item só. Novo chat permanece fixo.",
+          "Fixe e reordene as abas da barra lateral. As não fixadas vão para o menu Mais.",
         dragToReorder: "Arraste para reordenar",
         pinToSidebar: "Fixar {name} na barra lateral",
         moreHolds: "Mais ({count})",
@@ -1258,7 +1257,7 @@ export const ptBR = {
       sidebarMenu: {
         title: "Menu da barra lateral",
         description:
-          "Mostre, oculte e reordene os itens do menu de perfil da barra lateral. Configurações, Ajuda, Sair e Desligar permanecem fixos.",
+          "Escolha e reordene os atalhos do menu de perfil.",
         darkModeToggle: "Alternador de modo escuro",
         dragToReorder: "Arraste para reordenar",
       },

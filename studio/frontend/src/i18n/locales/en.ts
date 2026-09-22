@@ -1135,7 +1135,7 @@ export const en = {
       custom: {
         chatWidth: {
           label: "Chat width",
-          description: "Set the width of messages and the composer. Full width uses the space between sidebars.",
+          description: "Width of messages and the composer.",
           standard: "Standard",
           wide: "Wide",
           full: "Full width",
@@ -1208,7 +1208,6 @@ export const en = {
         },
         contrast: {
           label: "Contrast",
-          description: "Strength of borders and secondary text.",
         },
         reduceMotion: {
           label: "Reduce motion",
@@ -1238,7 +1237,7 @@ export const en = {
       sidebarNav: {
         title: "Sidebar navigation",
         description:
-          "Pin and reorder the sidebar tabs. Unpinned tabs collect in the More menu; a single unpinned tab is hidden instead of getting a menu of one. New chat stays fixed.",
+          "Pin and reorder the sidebar tabs. Unpinned tabs go to the More menu.",
         dragToReorder: "Drag to reorder",
         pinToSidebar: "Pin {name} to the sidebar",
         moreHolds: "More ({count})",
@@ -1246,7 +1245,7 @@ export const en = {
       sidebarMenu: {
         title: "Profile menu",
         description:
-          "Choose which shortcuts appear when you click your name at the bottom of the sidebar, and in what order. Settings, Help, Log out, and Shutdown always appear.",
+          "Pick and reorder the shortcuts under your name.",
         darkModeToggle: "Dark mode toggle",
         dragToReorder: "Drag to reorder",
       },
