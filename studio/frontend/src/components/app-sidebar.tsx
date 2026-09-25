@@ -2369,9 +2369,11 @@ export function AppSidebar() {
   const inlineNavIds = sidebarNav
     .filter((item) => navRowPinned(item))
     .map((item) => item.id);
+  // The mobile sheet shows labels regardless of the desktop pin state.
+  const sidebarRowsLabelled = isMobile || sidebarState !== "collapsed";
   // Mirrors ImagesWorkflowList's own test: it decides which row owns the highlight.
   const imagesWorkflowsListed =
-    sidebarState !== "collapsed" &&
+    sidebarRowsLabelled &&
     !(navRows.images.active && imagesPageMode === "train");
 
   const showSidebarBrand = true;
@@ -4288,7 +4290,7 @@ export function AppSidebar() {
                     overlay={
                       id === "images" &&
                       !row.active &&
-                      sidebarState !== "collapsed" ? (
+                      sidebarRowsLabelled ? (
                         <ImagesNavDisclosure />
                       ) : undefined
                     }
@@ -4297,7 +4299,7 @@ export function AppSidebar() {
                     {id === "images" ? (
                       <ImagesWorkflowList
                         active={row.active}
-                        collapsed={sidebarState === "collapsed"}
+                        collapsed={!sidebarRowsLabelled}
                         onPick={(workflowId) => {
                           useImageWorkflowStore
                             .getState()
