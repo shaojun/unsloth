@@ -230,8 +230,6 @@ export const ru = {
       organizeChats: "Настроить чаты",
       organizeProjects: "Настроить проекты",
       sortPinnedChats: "Сортировать закреплённые чаты",
-      moveUp: "Переместить вверх",
-      moveDown: "Переместить вниз",
     },
     dialog: {
       deleteChat: {
