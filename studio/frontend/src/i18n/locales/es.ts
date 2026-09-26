@@ -3229,6 +3229,11 @@ export const es = {
       gridView: "Vista de cuadrícula",
       listView: "Vista de lista",
       settings: "Ajustes de la Biblioteca",
+      sort: "Ordenar",
+      sortDefault: "Orden predeterminado",
+      sortName: "Nombre",
+      sortModified: "Modificado",
+      sortSize: "Tamaño",
     },
     create: {
       note: "Nota",

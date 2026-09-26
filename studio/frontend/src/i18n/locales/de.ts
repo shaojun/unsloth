@@ -3232,6 +3232,11 @@ export const de = {
       gridView: "Rasteransicht",
       listView: "Listenansicht",
       settings: "Bibliothekseinstellungen",
+      sort: "Sortieren",
+      sortDefault: "Standardreihenfolge",
+      sortName: "Name",
+      sortModified: "Geändert",
+      sortSize: "Größe",
     },
     create: {
       note: "Notiz",

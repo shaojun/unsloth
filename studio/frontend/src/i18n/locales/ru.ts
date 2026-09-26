@@ -3190,6 +3190,11 @@ export const ru = {
       gridView: "Сетка",
       listView: "Список",
       settings: "Настройки библиотеки",
+      sort: "Сортировка",
+      sortDefault: "Порядок по умолчанию",
+      sortName: "Имя",
+      sortModified: "Изменено",
+      sortSize: "Размер",
     },
     create: {
       note: "Заметка",
