@@ -39,6 +39,34 @@ class BattlegroundTestSlot(BaseModel):
     source_id: str = Field(..., min_length = 1, max_length = 64)
 
 
+class BattlegroundSkill(BaseModel):
+    name: str = Field(..., min_length = 1, max_length = 120)
+    instructions: str = Field(..., min_length = 1, max_length = 16000)
+
+
+class BattlegroundWebSearchConfig(BaseModel):
+    enabled: bool = True
+    provider: Literal["brave", "ddgs"] = "brave"
+    api_key: Optional[str] = Field(None, max_length = 4096)
+    max_results: int = Field(5, ge = 1, le = 10)
+    country: Optional[str] = Field(None, min_length = 2, max_length = 2)
+    language: Optional[str] = Field(None, min_length = 2, max_length = 8)
+
+
+class BattlegroundAgentHarness(BaseModel):
+    enabled: bool = True
+    version: Literal[1] = 1
+    instructions: Optional[str] = Field(None, max_length = 16000)
+    skills: list[BattlegroundSkill] = Field(default_factory = list, max_length = 16)
+    web_search: BattlegroundWebSearchConfig = Field(
+        default_factory = BattlegroundWebSearchConfig
+    )
+    mcp_config: dict[str, Any] = Field(default_factory = lambda: {"mcpServers": {}})
+    max_turns: int = Field(8, ge = 1, le = 30)
+    tool_timeout_seconds: float = Field(20.0, ge = 1.0, le = 120.0)
+    run_timeout_seconds: float = Field(120.0, ge = 5.0, le = 600.0)
+
+
 class BattlegroundTestCreate(BaseModel):
     name: str = Field(..., min_length = 1, max_length = 160)
     slots: list[BattlegroundTestSlot] = Field(..., min_length = 1, max_length = 4)
@@ -50,6 +78,7 @@ class BattlegroundTestCreate(BaseModel):
     )
     system_prompt: Optional[str] = Field(None, max_length = 8000)
     sampling: Optional[dict[str, Any]] = None
+    harness: BattlegroundAgentHarness = Field(default_factory = BattlegroundAgentHarness)
 
 
 class BattlegroundTestUpdate(BaseModel):

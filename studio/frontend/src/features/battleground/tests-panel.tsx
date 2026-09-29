@@ -143,6 +143,26 @@ export function TestsPanel() {
                     {!slot.ready && ` · ${t("battleground.notReady")}`}
                   </span>
                 ))}
+                {test.harness?.enabled && (
+                  <span className="rounded-full border px-2 py-0.5">
+                    {t("battleground.agentHarnessBadge")}
+                  </span>
+                )}
+                {test.harness?.web_search?.enabled && (
+                  <span className="rounded-full border px-2 py-0.5">
+                    {t("battleground.webSearch")} · {test.harness.web_search.provider === "ddgs" ? "DDGS" : "Brave"}
+                  </span>
+                )}
+                {(test.harness?.skills?.length ?? 0) > 0 && (
+                  <span className="rounded-full border px-2 py-0.5">
+                    {t("battleground.skillsCount", { count: test.harness.skills?.length ?? 0 })}
+                  </span>
+                )}
+                {(test.harness?.mcp_servers?.length ?? 0) > 0 && (
+                  <span className="rounded-full border px-2 py-0.5">
+                    {t("battleground.mcpCount", { count: test.harness.mcp_servers?.length ?? 0 })}
+                  </span>
+                )}
               </div>
               <ShareLinkRow test={test} />
             </div>
@@ -204,6 +224,17 @@ function NewTestDialog({
   const [blind, setBlind] = useState(true);
   const [reveal, setReveal] = useState(true);
   const [systemPrompt, setSystemPrompt] = useState("");
+  const [webSearch, setWebSearch] = useState(true);
+  const [webProvider, setWebProvider] = useState<"brave" | "ddgs">("brave");
+  const [webApiKey, setWebApiKey] = useState("");
+  const [webMaxResults, setWebMaxResults] = useState("5");
+  const [webCountry, setWebCountry] = useState("");
+  const [webLanguage, setWebLanguage] = useState("");
+  const [skillsJson, setSkillsJson] = useState("[]");
+  const [mcpJson, setMcpJson] = useState('{\n  "mcpServers": {}\n}');
+  const [maxTurns, setMaxTurns] = useState("8");
+  const [toolTimeout, setToolTimeout] = useState("20");
+  const [runTimeout, setRunTimeout] = useState("120");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -217,18 +248,42 @@ function NewTestDialog({
   const handleSave = async () => {
     setSaving(true);
     try {
+      const skills = JSON.parse(skillsJson) as unknown;
+      const mcpConfig = JSON.parse(mcpJson) as unknown;
+      if (!Array.isArray(skills)) throw new Error(t("battleground.skillsJsonArray"));
+      if (!mcpConfig || typeof mcpConfig !== "object" || Array.isArray(mcpConfig)) {
+        throw new Error(t("battleground.mcpJsonObject"));
+      }
       await battlegroundApi.createTest({
         name,
         slots: selected.map((sourceId) => ({ source_id: sourceId })),
         show_model_cards: !blind,
         reveal_after_vote: reveal,
         system_prompt: systemPrompt || null,
+        harness: {
+          enabled: true,
+          version: 1,
+          skills,
+          web_search: {
+            enabled: webSearch,
+            provider: webProvider,
+            api_key: webProvider === "brave" ? webApiKey : null,
+            max_results: Number(webMaxResults),
+            country: webCountry.trim() || null,
+            language: webLanguage.trim() || null,
+          },
+          mcp_config: mcpConfig,
+          max_turns: Number(maxTurns),
+          tool_timeout_seconds: Number(toolTimeout),
+          run_timeout_seconds: Number(runTimeout),
+        },
       });
       toast.success(t("battleground.testCreated"));
       onOpenChange(false);
       setName("");
       setSelected([]);
       setSystemPrompt("");
+      setWebApiKey("");
       onCreated();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
@@ -239,7 +294,7 @@ function NewTestDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{t("battleground.newTest")}</DialogTitle>
         </DialogHeader>
@@ -296,13 +351,80 @@ function NewTestDialog({
               onChange={(event) => setSystemPrompt(event.target.value)}
             />
           </div>
+          <div className="rounded-lg border p-3">
+            <div className="mb-3">
+              <Label>{t("battleground.sharedHarness")}</Label>
+              <p className="text-muted-foreground mt-1 text-xs">
+                {t("battleground.sharedHarnessHint")}
+              </p>
+            </div>
+            <div className="mb-3 flex items-center justify-between gap-2 text-sm">
+              <span>{t("battleground.webSearch")}</span>
+              <Switch
+                aria-label={t("battleground.webSearch")}
+                checked={webSearch}
+                onCheckedChange={setWebSearch}
+              />
+            </div>
+            {webSearch && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="flex flex-col gap-1.5">
+                  <Label>{t("battleground.searchProvider")}</Label>
+                  <select
+                    className="border-input bg-background h-9 rounded-md border px-3 text-sm"
+                    value={webProvider}
+                    onChange={(event) => setWebProvider(event.target.value as "brave" | "ddgs")}
+                  >
+                    <option value="brave">Brave Search</option>
+                    <option value="ddgs">DDGS ({t("battleground.keylessFallback")})</option>
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>{t("battleground.maxResults")}</Label>
+                  <Input type="number" min="1" max="10" value={webMaxResults} onChange={(event) => setWebMaxResults(event.target.value)} />
+                </div>
+                {webProvider === "brave" && (
+                  <div className="flex flex-col gap-1.5 sm:col-span-2">
+                    <Label>{t("battleground.braveApiKey")}</Label>
+                    <Input type="password" value={webApiKey} onChange={(event) => setWebApiKey(event.target.value)} />
+                  </div>
+                )}
+                <div className="flex flex-col gap-1.5">
+                  <Label>{t("battleground.countryOptional")}</Label>
+                  <Input maxLength={2} placeholder="US" value={webCountry} onChange={(event) => setWebCountry(event.target.value.toUpperCase())} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>{t("battleground.languageOptional")}</Label>
+                  <Input maxLength={8} placeholder="en" value={webLanguage} onChange={(event) => setWebLanguage(event.target.value)} />
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>{t("battleground.skillsJson")}</Label>
+            <p className="text-muted-foreground text-xs">{t("battleground.skillsJsonHint")}</p>
+            <Textarea value={skillsJson} rows={4} className="font-mono text-xs" onChange={(event) => setSkillsJson(event.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>{t("battleground.mcpJson")}</Label>
+            <p className="text-muted-foreground text-xs">{t("battleground.mcpJsonHint")}</p>
+            <Textarea value={mcpJson} rows={7} className="font-mono text-xs" onChange={(event) => setMcpJson(event.target.value)} />
+          </div>
+          <details className="rounded-lg border p-3">
+            <summary className="cursor-pointer text-sm font-medium">{t("battleground.agentLimits")}</summary>
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              <div className="flex flex-col gap-1.5"><Label>{t("battleground.maxAgentTurns")}</Label><Input type="number" min="1" max="30" value={maxTurns} onChange={(event) => setMaxTurns(event.target.value)} /></div>
+              <div className="flex flex-col gap-1.5"><Label>{t("battleground.toolTimeout")}</Label><Input type="number" min="1" max="120" value={toolTimeout} onChange={(event) => setToolTimeout(event.target.value)} /></div>
+              <div className="flex flex-col gap-1.5"><Label>{t("battleground.runTimeout")}</Label><Input type="number" min="5" max="600" value={runTimeout} onChange={(event) => setRunTimeout(event.target.value)} /></div>
+            </div>
+          </details>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t("battleground.cancel")}
           </Button>
           <Button
-            disabled={!name.trim() || selected.length < 1 || saving}
+            disabled={!name.trim() || selected.length < 1 || saving || (webSearch && webProvider === "brave" && !webApiKey.trim())}
             onClick={() => void handleSave()}
           >
             {t("battleground.save")}

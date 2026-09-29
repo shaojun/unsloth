@@ -163,11 +163,22 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             system_prompt TEXT,
             sampling_json TEXT NOT NULL DEFAULT '{}',
             slots_json TEXT NOT NULL DEFAULT '[]',
+            harness_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
         """
     )
+    test_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(battleground_tests)").fetchall()
+    }
+    if "harness_json" not in test_cols:
+        # Existing tests keep the empty object and therefore retain their
+        # original direct-completion behavior. Newly created tests explicitly
+        # snapshot an enabled agent harness.
+        conn.execute(
+            "ALTER TABLE battleground_tests ADD COLUMN harness_json TEXT NOT NULL DEFAULT '{}'"
+        )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS battleground_sessions (
@@ -218,10 +229,18 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             latency_ms REAL,
             prompt_tokens INTEGER,
             completion_tokens INTEGER,
+            agent_meta_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL
         )
         """
     )
+    response_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(battleground_responses)").fetchall()
+    }
+    if "agent_meta_json" not in response_cols:
+        conn.execute(
+            "ALTER TABLE battleground_responses ADD COLUMN agent_meta_json TEXT NOT NULL DEFAULT '{}'"
+        )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS battleground_feedback (
@@ -484,6 +503,7 @@ def create_test(
     reveal_after_vote: bool = True,
     system_prompt: Optional[str] = None,
     sampling: Optional[dict] = None,
+    harness: Optional[dict] = None,
     test_id: Optional[str] = None,
 ) -> dict:
     now = _now()
@@ -494,8 +514,8 @@ def create_test(
             """
             INSERT INTO battleground_tests (
                 id, name, status, show_model_cards, reveal_after_vote,
-                system_prompt, sampling_json, slots_json, created_at, updated_at
-            ) VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
+                system_prompt, sampling_json, slots_json, harness_json, created_at, updated_at
+            ) VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 test_id,
@@ -505,6 +525,7 @@ def create_test(
                 system_prompt,
                 json.dumps(sampling or {}),
                 json.dumps(slots),
+                json.dumps(harness or {}),
                 now,
                 now,
             ),
@@ -524,6 +545,7 @@ def update_test(
     system_prompt: Optional[str] = None,
     sampling: Optional[dict] = None,
     slots: Optional[list[dict]] = None,
+    harness: Optional[dict] = None,
 ) -> Optional[dict]:
     updates = []
     params: list = []
@@ -548,6 +570,9 @@ def update_test(
     if slots is not None:
         updates.append("slots_json = ?")
         params.append(json.dumps(slots))
+    if harness is not None:
+        updates.append("harness_json = ?")
+        params.append(json.dumps(harness))
     if not updates:
         return get_test(test_id)
     updates.append("updated_at = ?")
@@ -587,6 +612,7 @@ def get_test(test_id: str) -> Optional[dict]:
         data["reveal_after_vote"] = bool(data["reveal_after_vote"])
         data["sampling"] = _load_json(data.pop("sampling_json", None), {})
         data["slots"] = _load_json(data.pop("slots_json", None), [])
+        data["harness"] = _load_json(data.pop("harness_json", None), {})
         return data
     finally:
         conn.close()
@@ -607,6 +633,7 @@ def list_tests(include_archived: bool = False) -> list[dict]:
             data["reveal_after_vote"] = bool(data["reveal_after_vote"])
             data["sampling"] = _load_json(data.pop("sampling_json", None), {})
             data["slots"] = _load_json(data.pop("slots_json", None), [])
+            data["harness"] = _load_json(data.pop("harness_json", None), {})
             out.append(data)
         return out
     finally:
@@ -807,6 +834,7 @@ def create_response(
     latency_ms: Optional[float] = None,
     prompt_tokens: Optional[int] = None,
     completion_tokens: Optional[int] = None,
+    agent_meta: Optional[dict] = None,
     response_id: Optional[str] = None,
 ) -> dict:
     now = _now()
@@ -818,8 +846,8 @@ def create_response(
             INSERT INTO battleground_responses (
                 id, turn_id, session_id, source_id, instance_id, model_identity,
                 label, content, reasoning, error, latency_ms, prompt_tokens,
-                completion_tokens, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                completion_tokens, agent_meta_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 response_id,
@@ -835,6 +863,7 @@ def create_response(
                 latency_ms,
                 prompt_tokens,
                 completion_tokens,
+                json.dumps(agent_meta or {}),
                 now,
             ),
         )
@@ -849,6 +878,7 @@ def create_response(
         "model_identity": model_identity,
         "label": label,
         "content": content,
+        "agent_meta": agent_meta or {},
         "created_at": now,
     }
 
@@ -859,7 +889,11 @@ def get_response(response_id: str) -> Optional[dict]:
         row = conn.execute(
             "SELECT * FROM battleground_responses WHERE id = ?", (response_id,)
         ).fetchone()
-        return dict(row) if row else None
+        if row is None:
+            return None
+        data = dict(row)
+        data["agent_meta"] = _load_json(data.pop("agent_meta_json", None), {})
+        return data
     finally:
         conn.close()
 
@@ -871,7 +905,12 @@ def list_responses_for_turn(turn_id: str) -> list[dict]:
             "SELECT * FROM battleground_responses WHERE turn_id = ? ORDER BY created_at",
             (turn_id,),
         ).fetchall()
-        return [dict(row) for row in rows]
+        out = []
+        for row in rows:
+            data = dict(row)
+            data["agent_meta"] = _load_json(data.pop("agent_meta_json", None), {})
+            out.append(data)
+        return out
     finally:
         conn.close()
 
@@ -883,7 +922,12 @@ def list_responses_for_session(session_id: str) -> list[dict]:
             "SELECT * FROM battleground_responses WHERE session_id = ? ORDER BY created_at",
             (session_id,),
         ).fetchall()
-        return [dict(row) for row in rows]
+        out = []
+        for row in rows:
+            data = dict(row)
+            data["agent_meta"] = _load_json(data.pop("agent_meta_json", None), {})
+            out.append(data)
+        return out
     finally:
         conn.close()
 

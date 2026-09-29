@@ -43,6 +43,19 @@ export interface BattlegroundTest {
   reveal_after_vote: boolean;
   system_prompt: string | null;
   sampling: Record<string, unknown>;
+  harness: {
+    enabled?: boolean;
+    version?: number;
+    skills?: { name: string; instructions: string }[];
+    web_search?: {
+      enabled?: boolean;
+      provider?: "brave" | "ddgs";
+      api_key_set?: boolean;
+      max_results?: number;
+    };
+    mcp_servers?: { name: string; url: string; enabled: boolean }[];
+    max_turns?: number;
+  };
   slots: BattlegroundTestSlot[];
   created_at: string;
   updated_at: string;

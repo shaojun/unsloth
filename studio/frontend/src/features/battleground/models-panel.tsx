@@ -82,6 +82,9 @@ export function ModelsPanel() {
             </Button>
           </div>
         </div>
+        <p className="text-muted-foreground text-sm">
+          {t("battleground.sourceBoundary")}
+        </p>
         {sources.length === 0 && (
           <p className="text-muted-foreground rounded-lg border border-dashed p-6 text-center text-sm">
             {t("battleground.noSources")}

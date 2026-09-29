@@ -37,6 +37,13 @@ from pydantic import BaseModel
 
 from auth.authentication import get_current_subject
 from core.battleground import judge as battleground_judge
+from core.battleground.agent_harness import (
+    BATTLEGROUND_MCP_CONFIG_KIND,
+    BATTLEGROUND_WEB_SEARCH_KEY_KIND,
+    BattlegroundAgentError,
+    run_agent_harness,
+    validate_and_sanitize_harness,
+)
 from core.battleground.proxy import (
     BATTLEGROUND_API_KEY_KIND,
     BattlegroundProxyError,
@@ -494,6 +501,7 @@ def _revealed_map(session: dict, turn_id: str) -> dict[str, str]:
 
 def _serialize_test(test: dict, include_share: bool = True) -> dict:
     sources = {s["id"]: s for s in battleground_db.list_sources()}
+    harness_enabled = bool((test.get("harness") or {}).get("enabled"))
     slots = []
     for slot in test["slots"]:
         source = sources.get(slot["source_id"])
@@ -502,7 +510,12 @@ def _serialize_test(test: dict, include_share: bool = True) -> dict:
                 "source_id": slot["source_id"],
                 "source_name": source["name"] if source else "(deleted source)",
                 "kind": source["kind"] if source else None,
-                "ready": _source_ready(source) if source else False,
+                "ready": (
+                    _source_ready(source)
+                    and (not harness_enabled or bool((source.get("external_model") or "").strip()))
+                    if source
+                    else False
+                ),
             }
         )
     data = {
@@ -513,6 +526,7 @@ def _serialize_test(test: dict, include_share: bool = True) -> dict:
         "reveal_after_vote": test["reveal_after_vote"],
         "system_prompt": test["system_prompt"],
         "sampling": test["sampling"],
+        "harness": test.get("harness") or {},
         "slots": slots,
         "created_at": test["created_at"],
         "updated_at": test["updated_at"],
@@ -550,6 +564,10 @@ def create_test(payload: BattlegroundTestCreate, current_subject: str = Depends(
             source_ids.append(slot.source_id)
     if not source_ids:
         raise HTTPException(status_code = 400, detail = "A test needs at least one model")
+    try:
+        harness, harness_secrets = validate_and_sanitize_harness(payload.harness.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code = 400, detail = str(exc)) from exc
     test = battleground_db.create_test(
         name = payload.name.strip(),
         slots = [{"source_id": sid} for sid in source_ids],
@@ -557,7 +575,26 @@ def create_test(payload: BattlegroundTestCreate, current_subject: str = Depends(
         reveal_after_vote = payload.reveal_after_vote,
         system_prompt = payload.system_prompt,
         sampling = payload.sampling or {},
+        harness = harness,
     )
+    try:
+        if harness_secrets.get("web_search"):
+            upsert_secret(
+                BATTLEGROUND_WEB_SEARCH_KEY_KIND,
+                test["id"],
+                harness_secrets["web_search"],
+            )
+        if harness_secrets.get("mcp_config"):
+            upsert_secret(
+                BATTLEGROUND_MCP_CONFIG_KIND,
+                test["id"],
+                harness_secrets["mcp_config"],
+            )
+    except Exception:
+        battleground_db.delete_test(test["id"])
+        delete_secret(BATTLEGROUND_WEB_SEARCH_KEY_KIND, test["id"])
+        delete_secret(BATTLEGROUND_MCP_CONFIG_KIND, test["id"])
+        raise
     return _serialize_test(test)
 
 
@@ -597,6 +634,8 @@ def update_test(
 def delete_test(test_id: str, current_subject: str = Depends(get_current_subject)):
     if not battleground_db.delete_test(test_id):
         raise HTTPException(status_code = 404, detail = "Test not found")
+    delete_secret(BATTLEGROUND_WEB_SEARCH_KEY_KIND, test_id)
+    delete_secret(BATTLEGROUND_MCP_CONFIG_KIND, test_id)
     return {"ok": True}
 
 
@@ -1210,6 +1249,8 @@ def _iter_dpo_pairs(test_ids: list[str]):
                     "session_id": feedback["session_id"],
                     "chosen_source": chosen["source_id"],
                     "rejected_source": response["source_id"],
+                    "chosen_agent_meta": chosen.get("agent_meta") or {},
+                    "rejected_agent_meta": response.get("agent_meta") or {},
                 },
             )
     # Judge pairwise verdicts.
@@ -1248,6 +1289,8 @@ def _iter_dpo_pairs(test_ids: list[str]):
                         "confidence": result.get("confidence"),
                         "chosen_source": chosen["source_id"],
                         "rejected_source": rejected["source_id"],
+                        "chosen_agent_meta": chosen.get("agent_meta") or {},
+                        "rejected_agent_meta": rejected.get("agent_meta") or {},
                     },
                 )
 
@@ -1350,6 +1393,7 @@ def export_sft(
                     ],
                     "origin": "human",
                     "source_id": response["source_id"],
+                    "agent_meta": response.get("agent_meta") or {},
                 },
                 ensure_ascii = False,
             )
@@ -1389,6 +1433,7 @@ def export_failures(
                     "tags": feedback["tags"] or [],
                     "comment": feedback["comment"],
                     "source_id": response["source_id"],
+                    "agent_meta": response.get("agent_meta") or {},
                 },
                 ensure_ascii = False,
             )
@@ -1580,6 +1625,7 @@ async def _public_fanout_chat(
 
     turn = battleground_db.create_turn(session["id"], message, sampling)
     test_show_cards = bool(test.get("show_model_cards"))
+    harness = test.get("harness") or {}
 
     # Per-slot conversation context from the server-side transcript.
     history: list[dict] = battleground_db.list_turns(session["id"])
@@ -1587,9 +1633,9 @@ async def _public_fanout_chat(
     for response in battleground_db.list_responses_for_session(session["id"]):
         responses_by_turn.setdefault(response["turn_id"], {})[response["source_id"]] = response
 
-    def _slot_messages(source: dict) -> list[dict]:
+    def _slot_messages(source: dict, *, include_system: bool = True) -> list[dict]:
         messages: list[dict] = []
-        if system_prompt:
+        if include_system and system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         for past_turn in history:
             if past_turn["id"] == turn["id"]:
@@ -1634,13 +1680,35 @@ async def _public_fanout_chat(
             content_parts: list[str] = []
             final: dict = {}
             try:
-                async for event in stream_chat_completion(target, _slot_messages(source), sampling):
-                    if event["type"] == "delta":
-                        if "text" in event:
-                            content_parts.append(event["text"])
-                        await queue.put({"label": label, **event})
-                    else:
-                        final = event
+                agent_meta = None
+                if harness.get("enabled"):
+                    agent_result = await run_agent_harness(
+                        source = source,
+                        messages = _slot_messages(source, include_system = False),
+                        harness = harness,
+                        test_id = test["id"],
+                        system_prompt = system_prompt,
+                        sampling = sampling,
+                    )
+                    final = {
+                        "content": agent_result.content,
+                        "latency_ms": agent_result.latency_ms,
+                        "prompt_tokens": agent_result.prompt_tokens,
+                        "completion_tokens": agent_result.completion_tokens,
+                    }
+                    agent_meta = agent_result.agent_meta
+                else:
+                    # Compatibility for tests created before harness snapshots
+                    # were introduced. Newly created tests always use the SDK.
+                    async for event in stream_chat_completion(
+                        target, _slot_messages(source), sampling
+                    ):
+                        if event["type"] == "delta":
+                            if "text" in event:
+                                content_parts.append(event["text"])
+                            await queue.put({"label": label, **event})
+                        else:
+                            final = event
                 response = battleground_db.create_response(
                     turn_id = turn["id"],
                     session_id = session["id"],
@@ -1652,6 +1720,7 @@ async def _public_fanout_chat(
                     latency_ms = final.get("latency_ms"),
                     prompt_tokens = final.get("prompt_tokens"),
                     completion_tokens = final.get("completion_tokens"),
+                    agent_meta = agent_meta,
                 )
                 payload = {
                     "label": label,
@@ -1665,7 +1734,7 @@ async def _public_fanout_chat(
                 if test_show_cards:
                     payload["model_name"] = response["model_identity"]
                 await queue.put(payload)
-            except BattlegroundProxyError as exc:
+            except (BattlegroundProxyError, BattlegroundAgentError) as exc:
                 response = battleground_db.create_response(
                     turn_id = turn["id"],
                     session_id = session["id"],
