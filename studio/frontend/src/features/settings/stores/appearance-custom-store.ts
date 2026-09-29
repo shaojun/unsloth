@@ -104,7 +104,6 @@ export const SIDEBAR_NAV_ITEM_IDS = [
   "recipes",
   "export",
   "battleground",
-  "playground",
   "api",
 ] as const;
 
@@ -154,7 +153,6 @@ export const SIDEBAR_NAV_DEFAULT_PINNED: Record<SidebarNavItemId, boolean> = {
   recipes: false,
   export: false,
   battleground: true,
-  playground: true,
   api: false,
 };
 
@@ -162,7 +160,8 @@ export const SIDEBAR_NAV_DEFAULT_PINNED: Record<SidebarNavItemId, boolean> = {
  *  user arranged themselves. v3 pinned Video under Images; v4 moved Model hub above Projects;
  *  v5 put Video back under "More" and later added API before Audio shipped; v6 added Audio;
  *  v7 pinned Video under Images; v8 shipped separate Library and Battleground layouts;
- *  v9 ships both rows; v10 adds Playground. */
+ *  v9 ships both rows; v10 briefly added a separate Playground row, which the
+ *  Battleground rename now folds back into the Battleground row. */
 const SHIPPED_SIDEBAR_NAV_DEFAULTS: SidebarNavItemPref[][] = [
   [
     { id: "projects", pinned: true },

@@ -120,7 +120,6 @@ const shippedLayouts: SidebarNavItemPref[][] = [
     { id: "recipes", pinned: false },
     { id: "export", pinned: false },
     { id: "battleground", pinned: true },
-    { id: "playground", pinned: true },
     { id: "api", pinned: false },
   ],
   [
@@ -178,7 +177,7 @@ test("a customized version-5 sidebar keeps its order and only gains the rows add
   // The stored layout gains every id shipped after it, appended by sanitizeSidebarNav.
   assert.deepEqual(
     customization.sidebarNav.map((item) => item.id),
-    [...customizedV5.map((item) => item.id), "library", "audio", "battleground", "playground"],
+    [...customizedV5.map((item) => item.id), "library", "audio", "battleground"],
   );
   assert.equal(
     customization.sidebarNav.find((item) => item.id === "audio")?.pinned,
@@ -210,7 +209,6 @@ test("an install sitting on the version-6 default adopts the current layout", ()
     "images",
     "train",
     "battleground",
-    "playground",
   ]);
 });
 
@@ -231,7 +229,27 @@ test("both version-8 sidebar variants adopt the combined default", () => {
   }
 });
 
-test("the version-9 Battleground layout adds Playground", () => {
+test("a legacy Playground row folds into Battleground without a duplicate", () => {
+  const customization = sanitizeCustomization({
+    sidebarNav: [
+      { id: "hub", pinned: true },
+      { id: "battleground", pinned: true },
+      { id: "playground", pinned: false },
+      { id: "api", pinned: false },
+    ],
+  });
+
+  assert.deepEqual(
+    customization.sidebarNav.filter((item) => item.id === "battleground"),
+    [{ id: "battleground", pinned: true }],
+  );
+  const defaultIds: string[] = DEFAULT_CUSTOMIZATION.sidebarNav.map(
+    (item) => item.id,
+  );
+  assert.equal(defaultIds.includes("playground"), false);
+});
+
+test("the version-9 Battleground layout adopts the current default", () => {
   const customization = sanitizeCustomization({ sidebarNav: shippedLayouts[9] });
   assert.deepEqual(
     migrateShippedSidebarNavDefault(customization, 9, 10).sidebarNav,

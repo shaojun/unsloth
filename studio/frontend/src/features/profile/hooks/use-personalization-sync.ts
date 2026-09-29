@@ -42,7 +42,8 @@ const PUSH_DEBOUNCE_MS = 800;
 // Version 4 pins Video under Images. Without this bump a synced profile
 // rehydrates its stored layout over the local migration.
 // Version 5 updates the shipped Library/Video layout; version 6 adds Battleground.
-const PERSONALIZATION_VERSION = 7;
+// Version 8 folds the legacy standalone Playground row into Battleground.
+const PERSONALIZATION_VERSION = 8;
 
 type ProfileSnapshot = {
   displayName: string;
