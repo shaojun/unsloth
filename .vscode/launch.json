@@ -1,0 +1,131 @@
+{
+    // ─────────────────────────────────────────────────────────────────────────
+    // Unsloth Studio — F5 debugging (VS Code Remote-WSL)
+    //
+    // How this works:
+    //   * Open this folder through Remote-WSL (run `code .` from /home/shao/unsloth
+    //     inside WSL), not via \\wsl$\... from a plain Windows VS Code window.
+    //   * The Python debugger runs inside WSL. It needs the Python extension
+    //     (ms-python.python) + Python Debugger (ms-python.debugpy), both
+    //     installed "in WSL".
+    //   * The backend runs from THIS repo checkout, using the interpreter that
+    //     install.sh created (~/.unsloth/studio/unsloth_studio) so all heavy
+    //     deps (torch, fastapi, ...) resolve. If you reinstall/move it, update
+    //     the "python" paths below.
+    //   * Stop a session with the red Stop button (⏹). For configs using
+    //     "console": "integratedTerminal" Ctrl+C works too.
+    //   * If a studio server already holds port 8888 (e.g. from another debug
+    //     session or `unsloth studio`), this launch refuses to start a duplicate
+    //     by design. Stop it first (`unsloth studio stop`) or change --port.
+    //   * The frontend deps are now installed (studio/frontend/node_modules).
+    //     To rebuild the UI from source: cd studio/frontend && npm ci && npm run build
+    //     — the repo's studio/frontend/dist then wins over the installed copy.
+    // ─────────────────────────────────────────────────────────────────────────
+    "version": "0.2.0",
+    "configurations": [
+        {
+            // Main F5 target: the FastAPI/uvicorn backend + the served web UI.
+            // uvicorn runs in-process (no --reload), so breakpoints anywhere in
+            // studio/backend/** just work.
+            //
+            // "console": "internalConsole" is deliberate: serverReadyAction only
+            // fires on DEBUG CONSOLE output (it never sees integratedTerminal
+            // output), and it is what auto-opens the browser + forwards the port.
+            // Stop the server with the red Stop button, not Ctrl+C.
+            "name": "Unsloth Studio: Backend",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/studio/backend/run.py",
+            "python": "${env:HOME}/.unsloth/studio/unsloth_studio/bin/python",
+            "args": [
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8888"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "internalConsole",
+            "justMyCode": false,
+            // Debug the inference/llama-server child processes it spawns too.
+            "subProcess": true,
+            // The Vite child opens the browser for the Full Stack compound.
+            // When running this config alone, open http://127.0.0.1:8888 manually.
+        },
+        {
+            // Same server, but launched through the CLI exactly like a user
+            // would (`unsloth studio`) — for debugging unsloth_cli/** and the
+            // gate/deps logic around the launch. The venv python IS the studio
+            // venv, so the CLI serves in-process (no os.execvp) and CLI
+            // breakpoints work.
+            //
+            // NOTE: `studio run` (with subcommand) is a DIFFERENT command — the
+            // headless model server that requires --model; without it the app
+            // exits instantly with "Missing option '--model'". That was the
+            // "exits automatically" bug in v1 of this file.
+            "name": "Unsloth Studio: CLI (unsloth studio)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "unsloth_cli",
+            "python": "${env:HOME}/.unsloth/studio/unsloth_studio/bin/python",
+            "args": [
+                "studio",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8888"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "subProcess": true,
+            "serverReadyAction": {
+                "pattern": "Unsloth Studio running on .*?127\\.0\\.0\\.1:(\\d+)",
+                "uriFormat": "http://127.0.0.1:%s",
+                "action": "openExternally"
+            }
+        },
+        {
+            // Frontend-only dev server (React/Vite) for hacking on the UI.
+            // Vite proxies /api and /v1 to 127.0.0.1:8888, so a backend must be
+            // running too — the "Full Stack" compound below starts both.
+            //
+            // runtimeExecutable is the repo-managed Node 24 from ~/.unsloth/node
+            // ON PURPOSE: the project's .npmrc supply-chain gate (min-release-age)
+            // needs npm >= 11.10, and the system npm (10.x) rejects the install.
+            "name": "Unsloth Studio: Frontend (Vite dev)",
+            "type": "node",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/studio/frontend",
+            "runtimeExecutable": "${env:HOME}/.unsloth/node/bin/npm",
+            "runtimeArgs": [
+                "run",
+                "dev"
+            ],
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "serverReadyAction": {
+                // Vite prints "ready in NNN ms" once it accepts connections;
+                // catches Vite's port when it starts.
+                "pattern": "ready in \\d+ ms",
+                "uriFormat": "http://localhost:5173",
+                "action": "openExternally"
+            }
+        }
+    ],
+    "compounds": [
+        {
+            // Backend debugger + Vite dev server together. Open the VITE URL
+            // (http://localhost:5173) in the browser — it hot-reloads frontend
+            // src changes while the backend serves the API on 8888. Type-check
+            // the frontend first so build-blocking TypeScript errors stop F5.
+            "name": "Unsloth Studio: Full Stack (backend + Vite)",
+            "configurations": [
+                "Unsloth Studio: Backend",
+                "Unsloth Studio: Frontend (Vite dev)"
+            ],
+            "preLaunchTask": "Studio Frontend: typecheck",
+            "stopAll": true
+        }
+    ]
+}
