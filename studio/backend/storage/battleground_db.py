@@ -34,6 +34,7 @@ import secrets
 import sqlite3
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ logger = logging.getLogger(__name__)
 from utils.paths import studio_db_path, ensure_dir
 
 _schema_lock = threading.Lock()
-_schema_ready = False
+_schema_ready: set[Path] = set()
 
 # Sentinel for "field not provided" in partial updates (None means "clear").
 _UNSET = object()
@@ -349,18 +350,20 @@ def _conn_ensure_indexes(conn: sqlite3.Connection) -> None:
 
 
 def get_connection() -> sqlite3.Connection:
-    """Open studio.db with WAL mode; create battleground schema once per process."""
-    global _schema_ready
+    """Open studio.db with WAL mode; create battleground schema once per database."""
     db_path = studio_db_path()
     ensure_dir(db_path.parent)
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
-    if not _schema_ready:
+    if db_path not in _schema_ready:
         with _schema_lock:
-            if not _schema_ready:
+            schema_path = db_path.resolve()
+            if schema_path not in _schema_ready:
                 try:
                     _ensure_schema(conn)
-                    _schema_ready = True
+                    conn.commit()
+                    # Remember both forms to support symlinked database paths.
+                    _schema_ready.update((schema_path, db_path))
                 except Exception:
                     conn.close()
                     raise
@@ -369,9 +372,8 @@ def get_connection() -> sqlite3.Connection:
 
 def reset_schema_cache() -> None:
     """Test hook: force the next connection to re-run schema init."""
-    global _schema_ready
     with _schema_lock:
-        _schema_ready = False
+        _schema_ready.clear()
 
 
 # ---------------------------------------------------------------------------
